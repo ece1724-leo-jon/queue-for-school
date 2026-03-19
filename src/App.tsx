@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import type { FormEvent, CSSProperties, ReactNode, MouseEvent as ReactMouseEvent } from 'react';
 import socket from './socket';
 import {
   requestNotificationPermission,
@@ -17,9 +18,32 @@ import {
   onUserDataChange
 } from './utils/userIdentity';
 import './App.css';
+import type {
+  QueueType,
+  CombinedQueueType,
+  QueueEntry,
+  Queues,
+  MyEntryInfo,
+  MyEntries,
+  RoomInfo,
+  Toast as ToastType,
+  TurnAlert,
+  JoinData,
+  NotificationPermissionStatus,
+  JoinedQueuePayload,
+  LeftQueuePayload,
+  TurnApproachingPayload,
+  BeingCalledPayload,
+  PushedBackPayload,
+  FinishedAssistingPayload,
+  RemovedFromQueuePayload,
+  RoomDeletedPayload,
+  ErrorPayload,
+  RestoreEntriesPayload,
+} from './types';
 
 // Get the API base URL dynamically
-const getApiBaseUrl = () => {
+const getApiBaseUrl = (): string => {
   if (import.meta.env.VITE_API_URL) {
     return import.meta.env.VITE_API_URL;
   }
@@ -33,7 +57,7 @@ const getApiBaseUrl = () => {
 const API_BASE_URL = getApiBaseUrl();
 
 // Format time ago
-const formatTimeAgo = (isoString) => {
+const formatTimeAgo = (isoString: string): string => {
   const diff = Date.now() - new Date(isoString).getTime();
   const minutes = Math.floor(diff / 60000);
   if (minutes < 1) return 'Just now';
@@ -42,7 +66,7 @@ const formatTimeAgo = (isoString) => {
 };
 
 // TimeAgo Component for auto-refresh
-function TimeAgo({ isoString }) {
+function TimeAgo({ isoString }: { isoString: string }) {
   const [timeLabel, setTimeLabel] = useState(() => formatTimeAgo(isoString));
 
   useEffect(() => {
@@ -78,7 +102,7 @@ function HomeLink() {
 }
 
 // Room Badge Component
-function RoomBadge({ name }) {
+function RoomBadge({ name }: { name: string | null }) {
   if (!name) return null;
   return (
     <div className="room-badge" title="Current TA Room">
@@ -111,7 +135,7 @@ function GitHubLink() {
 }
 
 // Theme Toggle Component
-function ThemeToggle({ theme, setTheme }) {
+function ThemeToggle({ theme, setTheme }: { theme: string; setTheme: (t: string) => void }) {
   return (
     <button
       className="theme-icon-btn"
@@ -143,7 +167,7 @@ function ThemeToggle({ theme, setTheme }) {
 }
 
 // Notification Toggle Component
-function NotificationToggle({ status, onEnable }) {
+function NotificationToggle({ status, onEnable }: { status: NotificationPermissionStatus; onEnable: () => void }) {
   if (status === 'unsupported') return null;
 
   const isEnabled = status === 'granted';
@@ -177,7 +201,7 @@ function NotificationToggle({ status, onEnable }) {
 }
 
 // Toast notification component
-function Toast({ toasts, removeToast }) {
+function Toast({ toasts, removeToast }: { toasts: ToastType[]; removeToast: (id: number) => void }) {
   return (
     <div className="toast-container">
       {toasts.map((toast) => (
@@ -201,7 +225,7 @@ function Toast({ toasts, removeToast }) {
 }
 
 // Full Window Alert Component
-function FullWindowAlert({ message, queueType, onDismiss }) {
+function FullWindowAlert({ message, queueType, onDismiss }: { message: string; queueType: QueueType; onDismiss: () => void }) {
   const isAutoAlert = message === "You're next! Please stay on the page.";
 
   return (
@@ -221,7 +245,7 @@ function FullWindowAlert({ message, queueType, onDismiss }) {
 }
 
 // Success Check-in Overlay
-function SuccessOverlay({ message, onDismiss }) {
+function SuccessOverlay({ message, onDismiss }: { message: string; onDismiss: () => void }) {
   useEffect(() => {
     const timer = setTimeout(onDismiss, 3000);
     return () => clearTimeout(timer);
@@ -242,7 +266,7 @@ function SuccessOverlay({ message, onDismiss }) {
 }
 
 // Connection Status Component
-function ConnectionStatus({ isConnected }) {
+function ConnectionStatus({ isConnected }: { isConnected: boolean }) {
   return (
     <div className={`connection-status ${isConnected ? 'connected' : 'disconnected'}`}>
       <span className={`status-dot ${isConnected ? 'connected' : 'disconnected'}`}></span>
@@ -252,7 +276,22 @@ function ConnectionStatus({ isConnected }) {
 }
 
 // Queue Item component
-function QueueItem({ item, position, isYou, isTA, queueType, onRemove, onCallSpecific, onCancelCall, currentUserId, onFollow, onUnfollow, inputName }) {
+interface QueueItemProps {
+  item: QueueEntry;
+  position: number;
+  isYou: boolean;
+  isTA: boolean;
+  queueType: CombinedQueueType;
+  onRemove: (entryId: string) => void;
+  onCallSpecific: (queueType: string, entryId: string) => void;
+  onCancelCall: (queueType: string, entryId: string) => void;
+  currentUserId: string;
+  onFollow: (entryId: string, inputName: string) => void;
+  onUnfollow: (entryId: string) => void;
+  inputName: string;
+}
+
+function QueueItem({ item, position, isYou, isTA, queueType, onRemove, onCallSpecific, onCancelCall, currentUserId, onFollow, onUnfollow, inputName }: QueueItemProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   const isAssisting = item.status === 'assisting';
   const isCalled = item.status === 'called';
@@ -376,6 +415,29 @@ function QueueItem({ item, position, isYou, isTA, queueType, onRemove, onCallSpe
 }
 
 // Queue Card component
+interface QueueCardProps {
+  type: CombinedQueueType;
+  title: string;
+  icon: string;
+  queue: QueueEntry[];
+  myEntry?: MyEntryInfo | null;
+  allMyEntries?: MyEntries;
+  isTA: boolean;
+  onJoin: (queueType: QueueType) => (data: JoinData) => void;
+  onLeave: (queueType: QueueType, entryId: string) => () => void;
+  onCall: () => void;
+  onCallMarking?: () => void;
+  onCallQuestion?: () => void;
+  onCallSpecific: (queueType: string, entryId: string) => void;
+  onCancelCall: (queueType: string, entryId: string) => void;
+  onStartAssisting: (entryId: string) => void;
+  onNext: () => void;
+  onPushBack: (queueType: QueueType, entryId: string) => () => void;
+  onRemove: (entryId: string) => void;
+  onFollow: (entryId: string, inputName: string) => void;
+  onUnfollow: (entryId: string) => void;
+}
+
 function QueueCard({
   type,
   title,
@@ -397,30 +459,30 @@ function QueueCard({
   onRemove,
   onFollow,
   onUnfollow
-}) {
+}: QueueCardProps) {
   const [name, setName] = useState('');
   const [studentId, setStudentId] = useState('');
   const [email, setEmail] = useState('');
   const [description, setDescription] = useState('');
   const [isJoining, setIsJoining] = useState(false);
-  const [joinType, setJoinType] = useState('marking'); // For combined view joining
+  const [joinType, setJoinType] = useState<QueueType>('marking'); // For combined view joining
 
   // Initialize userId
   useEffect(() => {
     getUserId(); // Ensure userId exists
   }, []);
 
-  const handleSubmit = async (e) => {
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     if (!name.trim()) return;
 
     // Determine effective type for validation and join
-    const effectiveType = type === 'combined' ? joinType : type;
+    const effectiveType: QueueType = type === 'combined' ? joinType : type as QueueType;
 
     if (effectiveType === 'marking' && (!studentId.trim() || studentId.length !== 4)) return;
 
     setIsJoining(true);
-    await onJoin(effectiveType)({ // onJoin now expects type if curried, or we adjust how onJoin is passed
+    await onJoin(effectiveType)({
       name: name.trim(),
       studentId: studentId.trim(),
       email: email.trim(),
@@ -432,14 +494,21 @@ function QueueCard({
   };
 
   // Helper to find position
-  function itemPosition(queue, entryId) {
+  function itemPosition(queue: QueueEntry[], entryId: string): number | null {
     const entry = queue.find(item => item.id === entryId);
     if (!entry || (entry.status !== 'waiting' && entry.status !== 'called')) return null;
     return entry.position;
   }
 
   // Calculate positions for combined view or single view
-  let myPositions = [];
+  interface MyPosition {
+    type: QueueType;
+    position?: number;
+    status: string;
+    entryId?: string;
+  }
+
+  const myPositions: MyPosition[] = [];
   if (type === 'combined' && !isTA && allMyEntries) {
     if (allMyEntries.marking) {
       // Find in the combined queue
@@ -454,8 +523,8 @@ function QueueCard({
     }
   } else if (myEntry) {
     const pos = itemPosition(queue, myEntry.entryId);
-    if (pos !== null) myPositions.push({ type, position: pos, status: myEntry.status, entryId: myEntry.entryId });
-    else if (myEntry.status === 'assisting') myPositions.push({ type, status: 'assisting' });
+    if (pos !== null) myPositions.push({ type: type as QueueType, position: pos, status: myEntry.status, entryId: myEntry.entryId });
+    else if (myEntry.status === 'assisting') myPositions.push({ type: type as QueueType, status: 'assisting' });
   }
 
   const isAssistingAny = queue.some(item => item.status === 'assisting');
@@ -490,12 +559,12 @@ function QueueCard({
               ) : (
                 <>
                   <p className="position-number">#{pos.position}</p>
-                  <p>{pos.position === 1 ? "You're next!" : `${pos.position - 1} ahead of you`}</p>
+                  <p>{pos.position === 1 ? "You're next!" : `${(pos.position ?? 0) - 1} ahead of you`}</p>
                 </>
               )}
 
               <div className="leave-btn-container" style={{ display: 'flex', justifyContent: 'center', gap: '12px' }}>
-                {pos.status === 'waiting' && pos.position <= 3 && waitingCount > 1 && (
+                {pos.status === 'waiting' && (pos.position ?? 0) <= 3 && waitingCount > 1 && pos.entryId && (
                   <button
                     className="btn btn-sm"
                     style={{ background: 'rgba(255,255,255,0.9)', color: '#333' }}
@@ -504,7 +573,7 @@ function QueueCard({
                     Push Back
                   </button>
                 )}
-                {pos.status !== 'assisting' && (
+                {pos.status !== 'assisting' && pos.entryId && (
                   <button
                     className="btn btn-sm"
                     style={{ color: 'white', borderColor: 'white' }}
@@ -554,7 +623,7 @@ function QueueCard({
             <button className={`btn btn-${type === 'combined' ? 'marking' : type}`} onClick={onNext}>
               Finish Assisting
             </button>
-          ) : isTopCalled ? (
+          ) : isTopCalled && topItem ? (
             <>
               <button
                 className={`btn btn-success`}
@@ -596,14 +665,14 @@ function QueueCard({
               <button
                 className={`btn btn-sm ${joinType === 'marking' ? 'btn-marking' : 'btn-secondary'}`}
                 onClick={() => setJoinType('marking')}
-                disabled={allMyEntries?.marking}
+                disabled={!!allMyEntries?.marking}
               >
                 Join Marking
               </button>
               <button
                 className={`btn btn-sm ${joinType === 'question' ? 'btn-question' : 'btn-secondary'}`}
                 onClick={() => setJoinType('question')}
-                disabled={allMyEntries?.question}
+                disabled={!!allMyEntries?.question}
               >
                 Join Question
               </button>
@@ -684,10 +753,10 @@ function QueueCard({
 }
 
 // All Rooms View Component
-function AllRoomsView({ theme, setTheme, setRoom }) {
-  const [rooms, setRooms] = useState([]);
+function AllRoomsView({ theme, setTheme, setRoom }: { theme: string; setTheme: (t: string) => void; setRoom: (room: string) => void }) {
+  const [rooms, setRooms] = useState<RoomInfo[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
+  const [error, setError] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
 
   const fetchRooms = () => {
@@ -724,7 +793,7 @@ function AllRoomsView({ theme, setTheme, setRoom }) {
 
   // Listen for real-time room updates via socket
   useEffect(() => {
-    const handleRoomsUpdate = (roomList) => {
+    const handleRoomsUpdate = (roomList: RoomInfo[]) => {
       setRooms(roomList);
       // If we were loading initially and now have data, stop loading
       if (loading && roomList) {
@@ -768,8 +837,8 @@ function AllRoomsView({ theme, setTheme, setRoom }) {
             transition: 'background 0.2s ease',
             opacity: isRefreshing ? 0.6 : 1
           }}
-          onMouseEnter={(e) => !isRefreshing && (e.currentTarget.style.background = 'var(--bg-secondary)')}
-          onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+          onMouseEnter={(e) => !isRefreshing && ((e.currentTarget as HTMLElement).style.background = 'var(--bg-secondary)')}
+          onMouseLeave={(e) => ((e.currentTarget as HTMLElement).style.background = 'transparent')}
         >
           <svg
             width="20"
@@ -860,7 +929,7 @@ function AllRoomsView({ theme, setTheme, setRoom }) {
 }
 
 // Home Page Component
-function HomePage({ theme, setTheme, room }) {
+function HomePage({ theme, setTheme, room }: { theme: string; setTheme: (t: string) => void; room: string | null }) {
   return (
     <div className="home-page">
       <h1 className="home-title">ECE297 Queue</h1>
@@ -893,13 +962,21 @@ function HomePage({ theme, setTheme, room }) {
 }
 
 // TA Login Page Component
-function TALoginPage({ onLogin, theme, setTheme, room, setRoom }) {
+interface TALoginPageProps {
+  onLogin: () => void;
+  theme: string;
+  setTheme: (t: string) => void;
+  room: string | null;
+  setRoom: (room: string) => void;
+}
+
+function TALoginPage({ onLogin, theme, setTheme, room, setRoom }: TALoginPageProps) {
   const [password, setPassword] = useState('');
   const [masterPassword, setMasterPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [roomStatus, setRoomStatus] = useState({ checked: false, hasPassword: false });
+  const [roomStatus, setRoomStatus] = useState<{ checked: boolean; hasPassword: boolean }>({ checked: false, hasPassword: false });
 
   useEffect(() => {
     if (!room) {
@@ -917,7 +994,7 @@ function TALoginPage({ onLogin, theme, setTheme, room, setRoom }) {
       });
   }, [room]);
 
-  const handleSubmit = async (e) => {
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
     setError('');
@@ -958,7 +1035,7 @@ function TALoginPage({ onLogin, theme, setTheme, room, setRoom }) {
   const [manualRoomInput, setManualRoomInput] = useState('');
 
   // Handle manual room entry (SPA navigation without hard refresh)
-  const handleRoomSubmit = (e) => {
+  const handleRoomSubmit = (e: FormEvent) => {
     e.preventDefault();
     if (manualRoomInput.trim()) {
       const newRoom = manualRoomInput.trim();
@@ -1093,6 +1170,22 @@ function TALoginPage({ onLogin, theme, setTheme, room, setRoom }) {
 }
 
 // Student View Component
+interface StudentViewProps {
+  queues: Queues;
+  myEntries: MyEntries;
+  isConnected: boolean;
+  theme: string;
+  setTheme: (t: string) => void;
+  notificationStatus: NotificationPermissionStatus;
+  onEnableNotifications: () => void;
+  joinQueue: (queueType: QueueType) => (data: JoinData) => void;
+  leaveQueue: (queueType: QueueType, entryId: string) => () => void;
+  pushBack: (queueType: QueueType, entryId: string) => () => void;
+  followQuestion: (entryId: string, inputName: string) => void;
+  unfollowQuestion: (entryId: string) => void;
+  room: string | null;
+}
+
 function StudentView({
   queues,
   myEntries,
@@ -1107,7 +1200,7 @@ function StudentView({
   followQuestion,
   unfollowQuestion,
   room
-}) {
+}: StudentViewProps) {
   return (
     <div className="app">
       <header className="header">
@@ -1143,6 +1236,7 @@ function StudentView({
           onCallMarking={() => { }}
           onCallQuestion={() => { }}
           onCallSpecific={() => { }}
+          onCancelCall={() => { }}
           onStartAssisting={() => { }}
           onNext={() => { }}
           onRemove={() => { }}
@@ -1164,6 +1258,7 @@ function StudentView({
           onCallMarking={() => { }}
           onCallQuestion={() => { }}
           onCallSpecific={() => { }}
+          onCancelCall={() => { }}
           onStartAssisting={() => { }}
           onNext={() => { }}
           onRemove={() => { }}
@@ -1176,6 +1271,23 @@ function StudentView({
 }
 
 // TA View Component
+interface TAViewProps {
+  queues: Queues;
+  isConnected: boolean;
+  theme: string;
+  setTheme: (t: string) => void;
+  onLogout: () => void;
+  taCall: (queueType: QueueType) => () => void;
+  taCallSpecific: (queueType: string, entryId: string) => void;
+  taCancelCall: (queueType: string, entryId: string) => void;
+  taStartAssisting: (queueType: CombinedQueueType) => (entryId: string) => void;
+  taNext: (queueType: CombinedQueueType) => () => void;
+  taRemove: (queueType: CombinedQueueType) => (entryId: string) => void;
+  taClearAll: () => void;
+  taDeleteRoom: () => void;
+  room: string | null;
+}
+
 function TAView({
   queues,
   isConnected,
@@ -1191,15 +1303,15 @@ function TAView({
   taClearAll,
   taDeleteRoom,
   room
-}) {
+}: TAViewProps) {
   // Merge and sort queues
-  const combinedQueue = [
-    ...queues.marking.map(item => ({ ...item, type: 'marking' })),
-    ...queues.question.map(item => ({ ...item, type: 'question' }))
+  const combinedQueue: QueueEntry[] = [
+    ...queues.marking.map(item => ({ ...item, type: 'marking' as QueueType })),
+    ...queues.question.map(item => ({ ...item, type: 'question' as QueueType }))
   ].sort((a, b) => {
     // Sort by status priority then time
     // Priority: assisting > called > waiting
-    const statusScore = (status) => {
+    const statusScore = (status: string) => {
       if (status === 'assisting') return 3;
       if (status === 'called') return 2;
       return 1;
@@ -1209,7 +1321,7 @@ function TAView({
     const scoreB = statusScore(b.status);
 
     if (scoreA !== scoreB) return scoreB - scoreA; // Higher score first
-    return new Date(a.joinedAt) - new Date(b.joinedAt); // Older time first
+    return new Date(a.joinedAt).getTime() - new Date(b.joinedAt).getTime(); // Older time first
   });
 
   return (
@@ -1241,8 +1353,8 @@ function TAView({
           queue={combinedQueue}
           myEntry={null}
           isTA={true}
-          onJoin={() => { }}
-          onLeave={() => { }}
+          onJoin={() => () => { }}
+          onLeave={() => () => { }}
           onCall={() => { }} // Unused in combined mode
           onCallMarking={taCall('marking')}
           onCallQuestion={taCall('question')}
@@ -1275,13 +1387,13 @@ function TAView({
 }
 
 // Helper to get room from URL
-const getRoomFromUrl = () => {
+const getRoomFromUrl = (): string | null => {
   const params = new URLSearchParams(window.location.search);
   return params.get('ta');
 };
 
 // No Room Error Page
-function NoRoomPage({ theme, setTheme }) {
+function NoRoomPage({ theme, setTheme }: { theme: string; setTheme: (t: string) => void }) {
   return (
     <div className="home-page">
       <h1 className="home-title">ECE297 Queue</h1>
@@ -1315,26 +1427,28 @@ function NoRoomPage({ theme, setTheme }) {
   );
 }
 
+type PageType = 'home' | 'student' | 'ta-login' | 'ta' | 'all';
+
 // Main App
 function App() {
   const [isConnected, setIsConnected] = useState(socket.connected);
-  const [queues, setQueues] = useState({ marking: [], question: [] });
-  const [myEntries, setMyEntries] = useState({ marking: null, question: null });
-  const [toasts, setToasts] = useState([]);
-  const [notificationStatus, setNotificationStatus] = useState(getNotificationPermissionStatus());
+  const [queues, setQueues] = useState<Queues>({ marking: [], question: [] });
+  const [myEntries, setMyEntries] = useState<MyEntries>({ marking: null, question: null });
+  const [toasts, setToasts] = useState<ToastType[]>([]);
+  const [notificationStatus, setNotificationStatus] = useState<NotificationPermissionStatus>(getNotificationPermissionStatus());
   const [theme, setTheme] = useState(() => {
     const saved = localStorage.getItem('theme');
     return saved || 'light';
   });
-  const [page, setPage] = useState('home');
+  const [page, setPage] = useState<PageType>('home');
   const [isTAAuthenticated, setIsTAAuthenticated] = useState(() => {
     return sessionStorage.getItem('ta_auth') === 'true';
   });
-  const [turnAlert, setTurnAlert] = useState(null);
-  const [successOverlay, setSuccessOverlay] = useState(null);
+  const [turnAlert, setTurnAlert] = useState<TurnAlert | null>(null);
+  const [successOverlay, setSuccessOverlay] = useState<string | null>(null);
 
   // Get room from URL (allow updates for SPA navigation)
-  const [room, setRoom] = useState(getRoomFromUrl);
+  const [room, setRoom] = useState<string | null>(getRoomFromUrl);
 
   // Apply theme
   useEffect(() => {
@@ -1364,21 +1478,18 @@ function App() {
 
   // Sync TA Auth to session storage
   useEffect(() => {
-    sessionStorage.setItem('ta_auth', isTAAuthenticated);
+    sessionStorage.setItem('ta_auth', String(isTAAuthenticated));
   }, [isTAAuthenticated]);
-
-  // Note: register-user is emitted in onConnect handler and when initially setting up
-  // socket listeners (if socket.connected is true). No separate effect needed here.
 
   // Listen for user data changes from other tabs
   useEffect(() => {
-    return onUserDataChange((data) => {
+    return onUserDataChange(() => {
       // Logic if we were saving user entries in localStorage
       // Currently we rely on server pushing state
     });
   }, []);
 
-  const removeToast = useCallback((id) => {
+  const removeToast = useCallback((id: number) => {
     // Mark as exiting first
     setToasts(prev => prev.map(t => t.id === id ? { ...t, exiting: true } : t));
     // Remove after animation
@@ -1388,7 +1499,7 @@ function App() {
   }, []);
 
   // Toast management
-  const addToast = useCallback((title, message, type = 'info') => {
+  const addToast = useCallback((title: string, message: string, type: ToastType['type'] = 'info') => {
     const id = Date.now();
     setToasts(prev => [...prev, { id, title, message, type }]);
     setTimeout(() => {
@@ -1412,28 +1523,26 @@ function App() {
       addToast('Disconnected', 'Connection lost. Trying to reconnect...', 'error');
     };
 
-    const onQueuesUpdate = (data) => {
+    const onQueuesUpdate = (data: Queues) => {
       setQueues(data);
 
       // Update status in myEntries if user is in queue
-      // Also discover user's entries if myEntries doesn't have them yet (important for reconnection)
       const currentUserId = getUserId();
-      
+
       setMyEntries(prev => {
         const next = { ...prev };
-        ['marking', 'question'].forEach(type => {
+        (['marking', 'question'] as QueueType[]).forEach(type => {
           if (next[type]) {
             // We have an existing entry - try to find it by entryId
-            const entry = data[type].find(item => item.id === next[type].entryId);
+            const entry = data[type].find(item => item.id === next[type]!.entryId);
             if (entry) {
               next[type] = {
-                ...next[type],
+                ...next[type]!,
                 status: entry.status,
                 position: entry.position
               };
             } else {
-              // Entry not found by ID - maybe it was removed or ID changed
-              // Try to find by userId as fallback
+              // Entry not found by ID - try to find by userId as fallback
               const userEntry = data[type].find(item => item.userId === currentUserId);
               if (userEntry) {
                 next[type] = {
@@ -1447,7 +1556,6 @@ function App() {
             }
           } else {
             // We don't have an entry - check if user is actually in the queue
-            // This handles the case where restore-entries didn't arrive or was missed
             const userEntry = data[type].find(item => item.userId === currentUserId);
             if (userEntry) {
               next[type] = {
@@ -1462,36 +1570,31 @@ function App() {
       });
     };
 
-    const onRestoreEntries = (data) => {
-      // Only update if data contains valid entries
-      // This prevents overwriting discovered entries with null from restore-entries
+    const onRestoreEntries = (data: RestoreEntriesPayload) => {
       setMyEntries(prev => {
         const next = { ...prev };
-        ['marking', 'question'].forEach(type => {
+        (['marking', 'question'] as QueueType[]).forEach(type => {
           if (data[type]) {
             next[type] = data[type];
           }
-          // If data[type] is null but prev[type] exists, keep prev[type]
-          // This prevents race conditions where queues-update discovers the entry
-          // but then restore-entries with null overwrites it
         });
         return next;
       });
     };
 
-    const onJoinedQueue = (data) => {
+    const onJoinedQueue = (data: JoinedQueuePayload) => {
       setMyEntries(prev => ({
         ...prev,
         [data.queueType]: {
           entryId: data.entryId,
           position: data.position,
-          status: 'waiting'
+          status: 'waiting' as const
         }
       }));
       addToast('Joined Queue', `You are #${data.position} in the ${data.queueType} queue.`, 'success');
     };
 
-    const onLeftQueue = (data) => {
+    const onLeftQueue = (data: LeftQueuePayload) => {
       setMyEntries(prev => ({
         ...prev,
         [data.queueType]: null
@@ -1499,7 +1602,7 @@ function App() {
       setTurnAlert(null); // Clear any alerts if you leave
     };
 
-    const onTurnApproaching = (data) => {
+    const onTurnApproaching = (data: TurnApproachingPayload) => {
       // Play sound
       playNotificationSound();
 
@@ -1516,7 +1619,7 @@ function App() {
       });
     };
 
-    const onBeingCalled = (data) => {
+    const onBeingCalled = (data: BeingCalledPayload) => {
       // Play alert sound
       playUrgentSound();
 
@@ -1533,22 +1636,21 @@ function App() {
       });
     };
 
-    const onPushedBack = (data) => {
+    const onPushedBack = (data: PushedBackPayload) => {
       addToast('Pushed Back', `You are now #${data.position} in the queue.`, 'info');
       setTurnAlert(null); // Dismiss any turn alerts
     };
 
-    const onFinishedAssisting = (data) => {
+    const onFinishedAssisting = (data: FinishedAssistingPayload) => {
       addToast('Session Finished', data.message, 'success');
       playSuccessSound();
-      // Status will be updated via queues-update (entry removed)
     };
 
-    const onAssistingStarted = (data) => {
+    const onAssistingStarted = () => {
       setTurnAlert(null); // Dismiss alert when TA starts assisting
     };
 
-    const onRemovedFromQueue = (data) => {
+    const onRemovedFromQueue = (data: RemovedFromQueuePayload) => {
       addToast('Removed from Queue', data.message, 'info');
       setMyEntries(prev => ({
         ...prev,
@@ -1557,7 +1659,7 @@ function App() {
       setTurnAlert(null);
     };
 
-    const onRoomDeleted = (data) => {
+    const onRoomDeleted = (data: RoomDeletedPayload) => {
       addToast('Room Closed', data.message, 'warning');
       setTurnAlert(null);
       setTimeout(() => {
@@ -1565,7 +1667,7 @@ function App() {
       }, 3000);
     };
 
-    const onError = (data) => {
+    const onError = (data: ErrorPayload) => {
       addToast('Error', data.message, 'error');
     };
 
@@ -1627,7 +1729,7 @@ function App() {
   };
 
   // Queue actions
-  const joinQueue = (queueType) => (data) => {
+  const joinQueue = (queueType: QueueType) => (data: JoinData) => {
     // Store user's name for future use (e.g., when following questions)
     if (data.name) {
       localStorage.setItem('queue_user_name', data.name);
@@ -1640,7 +1742,7 @@ function App() {
     }
   };
 
-  const leaveQueue = (queueType, entryId) => () => {
+  const leaveQueue = (queueType: QueueType, entryId: string) => () => {
     socket.emit('leave-queue', {
       queueType,
       entryId,
@@ -1649,7 +1751,7 @@ function App() {
     });
   };
 
-  const pushBack = (queueType, entryId) => () => {
+  const pushBack = (queueType: QueueType, entryId: string) => () => {
     socket.emit('push-back', {
       queueType,
       entryId,
@@ -1660,13 +1762,13 @@ function App() {
     addToast('Pushing Back...', 'Delaying your turn by 1 position.', 'info');
   };
 
-  const followQuestion = (entryId, inputName) => {
+  const followQuestion = (entryId: string, inputName: string) => {
     const userId = getUserId();
 
     // Try to get user's name from: 1) input box, 2) existing queue entry, 3) localStorage
     const userEntry = queues.marking.find(e => e.userId === userId) ||
       queues.question.find(e => e.userId === userId);
-    let name = inputName?.trim() || userEntry?.name || localStorage.getItem('queue_user_name');
+    const name = inputName?.trim() || userEntry?.name || localStorage.getItem('queue_user_name');
 
     if (!name) {
       addToast('Name Required', 'Please enter your name in the form first.', 'error');
@@ -1686,7 +1788,7 @@ function App() {
     addToast('Following Question', 'You will be notified when this question is answered.', 'success');
   };
 
-  const unfollowQuestion = (entryId) => {
+  const unfollowQuestion = (entryId: string) => {
     socket.emit('unfollow-question', {
       entryId,
       userId: getUserId(),
@@ -1696,30 +1798,29 @@ function App() {
     addToast('Unfollowed', 'You will no longer be notified for this question.', 'info');
   };
 
-  const taCall = (queueType) => () => {
+  const taCall = (queueType: QueueType) => () => {
     socket.emit('ta-checkin', { queueType, room });
     setSuccessOverlay(`Called next student`);
     playSuccessSound();
   };
 
-  const taCallSpecific = (queueType, entryId) => {
+  const taCallSpecific = (queueType: string, entryId: string) => {
     // Debug toast to confirm action
     addToast('Calling Student', `Sending call request...`, 'info');
     socket.emit('ta-call-specific', { queueType, entryId, room });
     playSuccessSound();
   };
 
-  const taCancelCall = (queueType, entryId) => {
+  const taCancelCall = (queueType: string, entryId: string) => {
     socket.emit('ta-cancel-call', { queueType, entryId, room });
     addToast('Call Cancelled', 'Student returned to waiting status.', 'info');
   };
 
-  const taStartAssisting = (queueType) => (entryId) => {
+  const taStartAssisting = (queueType: CombinedQueueType) => (entryId: string) => {
     socket.emit('ta-start-assisting', { queueType, entryId, room });
-    // No overlay needed, UI updates immediately
   };
 
-  const taNext = (queueType) => () => {
+  const taNext = (queueType: CombinedQueueType) => () => {
     socket.emit('ta-next', { queueType, room });
     setSuccessOverlay(`Session finished`);
     playSuccessSound();
@@ -1744,21 +1845,11 @@ function App() {
     }
   };
 
-  const taRemove = (queueType) => (entryId) => {
-    // If combined, we need to know the real type, which is inside entry usually?
-    // But socket.emit expects queueType. 
-    // In TAView combined queue, items have 'type' property.
-    // QueueCard passes onRemove(item.id). 
-    // We need to fix this in QueueCard or here.
-
-    // Quick fix: if queueType is combined, find the item to get its real type
+  const taRemove = (queueType: CombinedQueueType) => (entryId: string) => {
     if (queueType === 'combined') {
       const item = [...queues.marking, ...queues.question].find(i => i.id === entryId);
       if (item) {
-        // Determine type if item doesn't have it (it should in TAView)
-        // But here we are looking at raw queues state which doesn't have 'type' prop injected
-        // We can infer type by checking which queue it is in
-        const type = queues.marking.find(i => i.id === entryId) ? 'marking' : 'question';
+        const type: QueueType = queues.marking.find(i => i.id === entryId) ? 'marking' : 'question';
         socket.emit('ta-remove', { queueType: type, entryId, room });
       }
     } else {
@@ -1785,7 +1876,7 @@ function App() {
   };
 
   // Render based on page
-  let content;
+  let content: ReactNode;
   switch (page) {
     case 'student':
       content = (
