@@ -27,7 +27,7 @@ export const sendNotification = (title: string, options: NotificationOptions & {
             badge: '/vite.svg',
             vibrate: [200, 100, 200],
             ...options,
-        });
+        } as NotificationOptions);
 
         notification.onclick = () => {
             window.focus();

@@ -647,7 +647,7 @@ function QueueCard({
             </>
           ) : (
             <button
-              className={`btn btn-${type === 'combined' ? 'marking' : type}`}
+              className={`btn btn-${type}`}
               onClick={onCall}
               disabled={waitingCount === 0}
             >
@@ -1362,6 +1362,7 @@ function TAView({
           onCancelCall={taCancelCall}
           onStartAssisting={taStartAssisting('combined')}
           onNext={taNext('combined')}
+          onPushBack={() => () => { }}
           onRemove={taRemove('combined')}
           onFollow={() => { }}
           onUnfollow={() => { }}
