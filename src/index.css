@@ -1,3 +1,7 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
 :root {
   /* Light mode colors (default) */
   --bg-primary: #f8fafc;

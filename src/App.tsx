@@ -18,6 +18,7 @@ import {
   onUserDataChange
 } from './utils/userIdentity';
 import './App.css';
+import { buttonVariants } from './components/ui/button';
 import type {
   QueueType,
   CombinedQueueType,
@@ -932,6 +933,9 @@ function AllRoomsView({ theme, setTheme, setRoom }: { theme: string; setTheme: (
 function HomePage({ theme, setTheme, room }: { theme: string; setTheme: (t: string) => void; room: string | null }) {
   return (
     <div className="home-page">
+      <div className="mb-3 inline-flex items-center rounded-full border border-slate-200/80 bg-white/70 px-4 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-slate-500 shadow-sm backdrop-blur">
+        Tailwind UI baseline
+      </div>
       <h1 className="home-title">ECE297 Queue</h1>
       <p className="home-subtitle" style={{ marginBottom: '12px' }}>TA Practical Session Queue Management</p>
 
@@ -941,14 +945,18 @@ function HomePage({ theme, setTheme, room }: { theme: string; setTheme: (t: stri
         </div>
       )}
 
-      <div className="home-buttons">
-        <a href="#student" className="home-btn student">
+      <div className="home-buttons rounded-4xl border border-slate-200/80 bg-white/80 p-4 shadow-glow backdrop-blur md:p-5">
+        <a href="#student" className={buttonVariants({ variant: 'student', size: 'lg', fullWidth: true })}>
           Student
         </a>
-        <a href="#ta" className="home-btn ta">
+        <a href="#ta" className={buttonVariants({ variant: 'ta', size: 'lg', fullWidth: true })}>
           TA Login
         </a>
-        <a href="#all" className="home-btn secondary" style={{ background: 'transparent', border: '1px solid var(--border-color)', color: 'var(--text-secondary)', justifyContent: 'center', marginTop: '12px' }}>
+        <a
+          href="#all"
+          className={buttonVariants({ variant: 'outline', size: 'default', fullWidth: true })}
+          style={{ marginTop: '12px' }}
+        >
           View All Rooms
         </a>
       </div>
