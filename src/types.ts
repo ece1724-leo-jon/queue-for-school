@@ -9,6 +9,14 @@ export interface Follower {
   name: string;
 }
 
+export interface AttachmentMeta {
+  id: string;
+  fileName: string;
+  contentType: string;
+  sizeBytes: number;
+  downloadUrl: string;
+}
+
 export interface QueueEntry {
   id: string;
   name: string;
@@ -19,6 +27,7 @@ export interface QueueEntry {
   status: EntryStatus;
   description?: string;
   followers?: Follower[];
+  attachment?: AttachmentMeta | null;
   position: number;
   type?: QueueType; // Present in combined queue view
 }
@@ -64,6 +73,7 @@ export interface JoinData {
   email: string;
   description: string;
   userId: string;
+  attachment?: AttachmentMeta | null;
 }
 
 export interface UserData {

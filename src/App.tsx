@@ -30,6 +30,7 @@ import type {
   Toast as ToastType,
   TurnAlert,
   JoinData,
+  AttachmentMeta,
   NotificationPermissionStatus,
   JoinedQueuePayload,
   LeftQueuePayload,
@@ -347,6 +348,18 @@ function QueueItem({ item, position, isYou, isTA, queueType, onRemove, onCallSpe
         {item.description && (
           <div className={`queue-item-description ${isExpanded ? 'expanded' : ''}`}>{item.description}</div>
         )}
+        {item.attachment && (
+          <div className="queue-item-description">
+            <a
+              href={`${API_BASE_URL}${item.attachment.downloadUrl}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(e) => e.stopPropagation()}
+            >
+              Attachment: {item.attachment.fileName}
+            </a>
+          </div>
+        )}
         {isTA && item.followers && item.followers.length > 0 && (
           <div className={`queue-item-followers ${isExpanded ? '' : 'collapsed'}`}>
             <span className="followers-label">Same question:</span> {item.followers.map(f => f.name).join(', ')}
@@ -421,6 +434,7 @@ interface QueueCardProps {
   title: string;
   icon: string;
   queue: QueueEntry[];
+  room?: string | null;
   myEntry?: MyEntryInfo | null;
   allMyEntries?: MyEntries;
   isTA: boolean;
@@ -444,6 +458,7 @@ function QueueCard({
   title,
   icon,
   queue,
+  room,
   myEntry,      // For single queue mode
   allMyEntries, // For combined mode
   isTA,
@@ -465,6 +480,8 @@ function QueueCard({
   const [studentId, setStudentId] = useState('');
   const [email, setEmail] = useState('');
   const [description, setDescription] = useState('');
+  const [attachmentFile, setAttachmentFile] = useState<File | null>(null);
+  const [attachmentError, setAttachmentError] = useState('');
   const [isJoining, setIsJoining] = useState(false);
   const [joinType, setJoinType] = useState<QueueType>('marking'); // For combined view joining
 
@@ -483,15 +500,51 @@ function QueueCard({
     if (effectiveType === 'marking' && (!studentId.trim() || studentId.length !== 4)) return;
 
     setIsJoining(true);
-    await onJoin(effectiveType)({
-      name: name.trim(),
-      studentId: studentId.trim(),
-      email: email.trim(),
-      description: description.trim(),
-      userId: getUserId()
-    });
-    setDescription('');
-    setIsJoining(false);
+    setAttachmentError('');
+
+    try {
+      let attachment: AttachmentMeta | null = null;
+      const userId = getUserId();
+
+      if (effectiveType === 'question' && attachmentFile) {
+        if (!room) {
+          throw new Error('Room is required before uploading a file.');
+        }
+
+        const formData = new FormData();
+        formData.append('file', attachmentFile);
+        formData.append('room', room);
+        formData.append('userId', userId);
+        formData.append('queueType', effectiveType);
+
+        const response = await fetch(`${API_BASE_URL}/api/attachments/upload`, {
+          method: 'POST',
+          body: formData,
+        });
+
+        if (!response.ok) {
+          const data = await response.json().catch(() => ({ error: 'Attachment upload failed' }));
+          throw new Error(data.error || 'Attachment upload failed');
+        }
+
+        attachment = await response.json() as AttachmentMeta;
+      }
+
+      await onJoin(effectiveType)({
+        name: name.trim(),
+        studentId: studentId.trim(),
+        email: email.trim(),
+        description: description.trim(),
+        userId,
+        attachment,
+      });
+      setDescription('');
+      setAttachmentFile(null);
+    } catch (error) {
+      setAttachmentError(error instanceof Error ? error.message : 'Upload failed');
+    } finally {
+      setIsJoining(false);
+    }
   };
 
   // Helper to find position
@@ -712,17 +765,28 @@ function QueueCard({
               )}
 
               {(type === 'question' || (type === 'combined' && joinType === 'question')) && (
-                <div className="form-group">
-                  <label className="form-label">Brief Description (optional)</label>
-                  <input
-                    type="text"
-                    className="form-input"
-                    placeholder="e.g., Need help with pathfinding algorithm"
-                    value={description}
-                    onChange={(e) => setDescription(e.target.value)}
-                    maxLength={100}
-                  />
-                </div>
+                <>
+                  <div className="form-group">
+                    <label className="form-label">Brief Description (optional)</label>
+                    <input
+                      type="text"
+                      className="form-input"
+                      placeholder="e.g., Need help with pathfinding algorithm"
+                      value={description}
+                      onChange={(e) => setDescription(e.target.value)}
+                      maxLength={100}
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Screenshot or file (optional)</label>
+                    <input
+                      type="file"
+                      className="form-input"
+                      accept="image/*,.pdf,.txt,.log"
+                      onChange={(e) => setAttachmentFile(e.target.files?.[0] ?? null)}
+                    />
+                  </div>
+                </>
               )}
 
               {/* Email field temporarily hidden
@@ -737,6 +801,12 @@ function QueueCard({
                 />
               </div>
               */}
+
+              {attachmentError && (
+                <div className="queue-item-description" style={{ color: 'var(--danger)', marginBottom: '12px' }}>
+                  {attachmentError}
+                </div>
+              )}
 
               <button
                 type="submit"
@@ -1235,6 +1305,7 @@ function StudentView({
           title="Marking Queue"
           icon="M"
           queue={queues.marking}
+          room={room}
           myEntry={myEntries.marking}
           isTA={false}
           onJoin={joinQueue}
@@ -1257,6 +1328,7 @@ function StudentView({
           title="Question Queue"
           icon="Q"
           queue={queues.question}
+          room={room}
           myEntry={myEntries.question}
           isTA={false}
           onJoin={joinQueue}
@@ -1359,6 +1431,7 @@ function TAView({
           title="All Students"
           icon="∑"
           queue={combinedQueue}
+          room={room}
           myEntry={null}
           isTA={true}
           onJoin={() => () => { }}

@@ -1,12 +1,15 @@
 import cors from 'cors';
 import express, { type Request, type Response } from 'express';
 import fs from 'fs';
+import multer from 'multer';
 import path from 'path';
 import { createServer } from 'http';
 import { fileURLToPath } from 'url';
 import { Server, type Socket } from 'socket.io';
 import { v4 as uuidv4 } from 'uuid';
 import {
+  createAttachmentRecord,
+  getAttachmentRecord,
   getRoomAnalytics,
   markRoomInactive,
   recordQueueEvent,
@@ -14,6 +17,7 @@ import {
   upsertRoomRecord,
   upsertUserRecord,
 } from './db.js';
+import { getStorageMode, loadAttachment, storeAttachment } from './storage.js';
 
 type QueueType = 'marking' | 'question';
 type QueueSelection = QueueType | 'combined';
@@ -22,6 +26,14 @@ type EntryStatus = 'waiting' | 'called' | 'assisting';
 interface Follower {
   userId: string;
   name: string;
+}
+
+interface AttachmentMeta {
+  id: string;
+  fileName: string;
+  contentType: string;
+  sizeBytes: number;
+  downloadUrl: string;
 }
 
 interface BaseQueueEntry {
@@ -40,6 +52,7 @@ interface MarkingEntry extends BaseQueueEntry {
 interface QuestionEntry extends BaseQueueEntry {
   description: string | null;
   followers: Follower[];
+  attachment: AttachmentMeta | null;
 }
 
 type QueueEntry = MarkingEntry | QuestionEntry;
@@ -81,6 +94,7 @@ interface JoinQuestionPayload {
   name?: string;
   email?: string | null;
   description?: string | null;
+  attachment?: AttachmentMeta | null;
   userId?: string;
   room?: string;
 }
@@ -147,6 +161,12 @@ const PORT = Number(process.env.PORT ?? 3001);
 const app = express();
 app.use(cors());
 app.use(express.json());
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 5 * 1024 * 1024,
+  },
+});
 
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
@@ -242,6 +262,18 @@ const normalizeQuestionEntry = (value: unknown): QuestionEntry | null => {
   const status: EntryStatus =
     entry.status === 'called' || entry.status === 'assisting' ? entry.status : 'waiting';
 
+  const attachmentValue = (entry as { attachment?: unknown }).attachment;
+  const attachment =
+    attachmentValue &&
+    typeof attachmentValue === 'object' &&
+    typeof (attachmentValue as AttachmentMeta).id === 'string' &&
+    typeof (attachmentValue as AttachmentMeta).fileName === 'string' &&
+    typeof (attachmentValue as AttachmentMeta).contentType === 'string' &&
+    typeof (attachmentValue as AttachmentMeta).sizeBytes === 'number' &&
+    typeof (attachmentValue as AttachmentMeta).downloadUrl === 'string'
+      ? (attachmentValue as AttachmentMeta)
+      : null;
+
   return {
     id: entry.id,
     name: entry.name,
@@ -253,6 +285,7 @@ const normalizeQuestionEntry = (value: unknown): QuestionEntry | null => {
     followers: Array.isArray(entry.followers)
       ? entry.followers.map(normalizeFollower).filter((follower): follower is Follower => follower !== null)
       : [],
+    attachment,
   };
 };
 
@@ -660,6 +693,7 @@ io.on('connection', (socket: Socket) => {
       userId,
       status: 'waiting',
       followers: [],
+      attachment: payload.attachment ?? null,
     };
 
     room.question.push(entry);
@@ -680,6 +714,7 @@ io.on('connection', (socket: Socket) => {
       payload: {
         name,
         description: entry.description,
+        attachmentId: entry.attachment?.id ?? null,
       },
     });
     saveQueues();
@@ -1102,6 +1137,92 @@ app.get('/api/rooms', (_req: Request, res: Response) => {
   } catch (error) {
     console.error('Error in /api/rooms:', error);
     res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+app.post('/api/attachments/upload', upload.single('file'), async (req: Request, res: Response) => {
+  const room = requireString(req.body.room);
+  const userId = requireString(req.body.userId);
+  const queueType = requireString(req.body.queueType);
+  const file = req.file;
+
+  if (!room || !userId || !file || !isQueueType(queueType)) {
+    res.status(400).json({ error: 'room, userId, queueType, and file are required' });
+    return;
+  }
+
+  try {
+    const attachmentId = uuidv4();
+    const stored = await storeAttachment({
+      attachmentId,
+      originalName: file.originalname,
+      contentType: file.mimetype || 'application/octet-stream',
+      buffer: file.buffer,
+    });
+
+    createAttachmentRecord({
+      id: attachmentId,
+      roomName: room,
+      userId,
+      queueType,
+      fileName: file.originalname,
+      contentType: file.mimetype || 'application/octet-stream',
+      sizeBytes: file.size,
+      storageKey: stored.storageKey,
+    });
+
+    upsertUserRecord({
+      userId,
+      lastRoom: room,
+      role: 'student',
+    });
+    touchRoomRecord(room);
+    recordQueueEvent({
+      roomName: room,
+      userId,
+      queueType,
+      eventType: 'attachment_uploaded',
+      payload: {
+        attachmentId,
+        fileName: file.originalname,
+        storageMode: getStorageMode(),
+      },
+    });
+
+    res.json({
+      id: attachmentId,
+      fileName: file.originalname,
+      contentType: file.mimetype || 'application/octet-stream',
+      sizeBytes: file.size,
+      downloadUrl: `/api/attachments/${attachmentId}/download`,
+    } satisfies AttachmentMeta);
+  } catch (error) {
+    console.error('Error in /api/attachments/upload:', error);
+    res.status(500).json({ error: 'Attachment upload failed' });
+  }
+});
+
+app.get('/api/attachments/:attachmentId/download', async (req: Request<{ attachmentId: string }>, res: Response) => {
+  const attachment = getAttachmentRecord(req.params.attachmentId);
+  if (!attachment) {
+    res.status(404).json({ error: 'Attachment not found' });
+    return;
+  }
+
+  try {
+    const fileBuffer = await loadAttachment({
+      storageKey: attachment.storageKey,
+    });
+
+    res.setHeader('Content-Type', attachment.contentType);
+    res.setHeader(
+      'Content-Disposition',
+      `inline; filename="${attachment.fileName.replace(/"/g, '\\"')}"`,
+    );
+    res.send(fileBuffer);
+  } catch (error) {
+    console.error('Error in /api/attachments/:attachmentId/download:', error);
+    res.status(500).json({ error: 'Attachment download failed' });
   }
 });
 

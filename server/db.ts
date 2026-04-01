@@ -33,6 +33,29 @@ export interface QueueEventInput {
   payload?: unknown;
 }
 
+export interface AttachmentRecordInput {
+  id: string;
+  roomName: string;
+  userId: string;
+  queueType: DBQueueType;
+  fileName: string;
+  contentType: string;
+  sizeBytes: number;
+  storageKey: string;
+}
+
+interface AttachmentRow {
+  id: string;
+  room_name: string;
+  user_id: string;
+  queue_type: string;
+  file_name: string;
+  content_type: string;
+  size_bytes: number;
+  storage_key: string;
+  created_at: string;
+}
+
 interface CountRow {
   event_type: string;
   count: number;
@@ -88,6 +111,21 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_queue_events_user_created
     ON queue_events(user_id, created_at DESC);
+
+  CREATE TABLE IF NOT EXISTS attachments (
+    id TEXT PRIMARY KEY,
+    room_name TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    queue_type TEXT NOT NULL,
+    file_name TEXT NOT NULL,
+    content_type TEXT NOT NULL,
+    size_bytes INTEGER NOT NULL,
+    storage_key TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_attachments_room_created
+    ON attachments(room_name, created_at DESC);
 `);
 
 const upsertRoomStatement = db.prepare(`
@@ -137,6 +175,37 @@ const markRoomInactiveStatement = db.prepare(`
   UPDATE rooms
   SET is_active = 0, updated_at = @updated_at
   WHERE name = @name
+`);
+
+const insertAttachmentStatement = db.prepare(`
+  INSERT INTO attachments (
+    id,
+    room_name,
+    user_id,
+    queue_type,
+    file_name,
+    content_type,
+    size_bytes,
+    storage_key,
+    created_at
+  )
+  VALUES (
+    @id,
+    @room_name,
+    @user_id,
+    @queue_type,
+    @file_name,
+    @content_type,
+    @size_bytes,
+    @storage_key,
+    @created_at
+  )
+`);
+
+const getAttachmentStatement = db.prepare(`
+  SELECT id, room_name, user_id, queue_type, file_name, content_type, size_bytes, storage_key, created_at
+  FROM attachments
+  WHERE id = ?
 `);
 
 const countEventsStatement = db.prepare(`
@@ -225,5 +294,36 @@ export const getRoomAnalytics = (roomName: string, limit = 20) => {
     roomName,
     counts: Object.fromEntries(counts.map((row) => [row.event_type, row.count])),
     recentEvents,
+  };
+};
+
+export const createAttachmentRecord = (input: AttachmentRecordInput): void => {
+  insertAttachmentStatement.run({
+    id: input.id,
+    room_name: input.roomName,
+    user_id: input.userId,
+    queue_type: input.queueType,
+    file_name: input.fileName,
+    content_type: input.contentType,
+    size_bytes: input.sizeBytes,
+    storage_key: input.storageKey,
+    created_at: new Date().toISOString(),
+  });
+};
+
+export const getAttachmentRecord = (id: string) => {
+  const row = getAttachmentStatement.get(id) as AttachmentRow | undefined;
+  if (!row) return null;
+
+  return {
+    id: row.id,
+    roomName: row.room_name,
+    userId: row.user_id,
+    queueType: row.queue_type as DBQueueType,
+    fileName: row.file_name,
+    contentType: row.content_type,
+    sizeBytes: row.size_bytes,
+    storageKey: row.storage_key,
+    createdAt: row.created_at,
   };
 };
