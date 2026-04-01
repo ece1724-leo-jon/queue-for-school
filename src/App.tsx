@@ -18,7 +18,11 @@ import {
   onUserDataChange
 } from './utils/userIdentity';
 import './App.css';
+import { Badge } from './components/ui/badge';
 import { buttonVariants } from './components/ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './components/ui/card';
+import { Input } from './components/ui/input';
+import { Label } from './components/ui/label';
 import type {
   QueueType,
   CombinedQueueType,
@@ -1003,9 +1007,9 @@ function AllRoomsView({ theme, setTheme, setRoom }: { theme: string; setTheme: (
 function HomePage({ theme, setTheme, room }: { theme: string; setTheme: (t: string) => void; room: string | null }) {
   return (
     <div className="home-page">
-      <div className="mb-3 inline-flex items-center rounded-full border border-slate-200/80 bg-white/70 px-4 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-slate-500 shadow-sm backdrop-blur">
-        Tailwind UI baseline
-      </div>
+      <Badge variant="neutral" className="mb-3">
+        Component UI
+      </Badge>
       <h1 className="home-title">ECE297 Queue</h1>
       <p className="home-subtitle" style={{ marginBottom: '12px' }}>TA Practical Session Queue Management</p>
 
@@ -1130,35 +1134,44 @@ function TALoginPage({ onLogin, theme, setTheme, room, setRoom }: TALoginPagePro
   if (!room) {
     return (
       <div className="login-page">
-        <div className="login-card">
-          <h1>TA Dashboard</h1>
-          <p>Enter a room name to create or manage it.</p>
+        <Card className="login-card border-slate-200/80">
+          <CardHeader>
+            <Badge variant="ta" className="w-fit">TA Access</Badge>
+            <CardTitle>TA Dashboard</CardTitle>
+            <CardDescription>Enter a room name to create or manage it.</CardDescription>
+          </CardHeader>
 
-          <form onSubmit={handleRoomSubmit}>
-            <div className="form-group">
-              <label className="form-label">Room Name</label>
-              <input
-                type="text"
-                className="form-input"
-                placeholder="e.g. SF101"
-                value={manualRoomInput}
-                onChange={(e) => setManualRoomInput(e.target.value)}
-                required
-                autoFocus
-              />
+          <CardContent className="space-y-6">
+            <form onSubmit={handleRoomSubmit} className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="room-name">Room Name</Label>
+                <Input
+                  id="room-name"
+                  type="text"
+                  placeholder="e.g. SF101"
+                  value={manualRoomInput}
+                  onChange={(e) => setManualRoomInput(e.target.value)}
+                  required
+                  autoFocus
+                />
+              </div>
+              <button type="submit" className={buttonVariants({ variant: 'ta', fullWidth: true })}>
+                Continue
+              </button>
+            </form>
+
+            <div className="border-t border-slate-200 pt-6">
+              <p className="mb-4 text-sm text-slate-500">Or view existing rooms:</p>
+              <a
+                href="/#all"
+                className={buttonVariants({ variant: 'outline', fullWidth: true })}
+                style={{ textDecoration: 'none' }}
+              >
+                View Active Rooms
+              </a>
             </div>
-            <button type="submit" className="btn btn-primary" style={{ width: '100%' }}>
-              Continue
-            </button>
-          </form>
-
-          <div style={{ marginTop: '24px', paddingTop: '24px', borderTop: '1px solid var(--border-color)' }}>
-            <p style={{ marginBottom: '16px', fontSize: '0.9rem' }}>Or view existing rooms:</p>
-            <a href="/#all" className="btn btn-secondary" style={{ textDecoration: 'none', display: 'block', textAlign: 'center' }}>
-              View Active Rooms
-            </a>
-          </div>
-        </div>
+          </CardContent>
+        </Card>
       </div>
     );
   }
@@ -1166,83 +1179,94 @@ function TALoginPage({ onLogin, theme, setTheme, room, setRoom }: TALoginPagePro
   if (!roomStatus.checked) {
     return (
       <div className="login-page">
-        <div className="login-card" style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '60px' }}>
+        <Card className="login-card" style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '60px' }}>
           <span className="spinner"></span>
-        </div>
+        </Card>
       </div>
     );
   }
 
   return (
     <div className="login-page">
-      <div className="login-card">
-        <h1>{roomStatus.hasPassword ? 'TA Login' : 'Setup Room'}</h1>
-        <p>{roomStatus.hasPassword ? 'Enter the room password' : 'Create a password for this room'}</p>
+      <Card className="login-card">
+        <CardHeader>
+          <Badge variant="ta" className="w-fit">{roomStatus.hasPassword ? 'Protected Room' : 'Room Setup'}</Badge>
+          <CardTitle>{roomStatus.hasPassword ? 'TA Login' : 'Setup Room'}</CardTitle>
+          <CardDescription>
+            {roomStatus.hasPassword ? 'Enter the room password' : 'Create a password for this room'}
+          </CardDescription>
+        </CardHeader>
 
-        {error && <div className="login-error">{error}</div>}
+        <CardContent className="space-y-6">
+          {error && <div className="login-error">{error}</div>}
 
-        <form onSubmit={handleSubmit}>
-          {!roomStatus.hasPassword && (
-            <>
-              <div className="form-group">
-                <label className="form-label">Master Password</label>
-                <input
+          <form onSubmit={handleSubmit} className="space-y-4">
+            {!roomStatus.hasPassword && (
+              <>
+                <div className="space-y-2">
+                  <Label htmlFor="master-password">Master Password</Label>
+                  <Input
+                    id="master-password"
+                    type="password"
+                    placeholder="Enter Master Password"
+                    value={masterPassword}
+                    onChange={(e) => setMasterPassword(e.target.value)}
+                    required
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="new-room-password">New Room Password</Label>
+                  <Input
+                    id="new-room-password"
+                    type="password"
+                    placeholder="Set Room Password"
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    required
+                  />
+                </div>
+              </>
+            )}
+
+            {roomStatus.hasPassword && (
+              <div className="space-y-2">
+                <Label htmlFor="room-password">Password</Label>
+                <Input
+                  id="room-password"
                   type="password"
-                  className="form-input"
-                  placeholder="Enter Master Password"
-                  value={masterPassword}
-                  onChange={(e) => setMasterPassword(e.target.value)}
+                  placeholder="Enter room password"
+                  value={password}
+                  onChange={(e) => {
+                    setPassword(e.target.value);
+                    setError('');
+                  }}
                   required
+                  autoFocus
                 />
               </div>
-              <div className="form-group">
-                <label className="form-label">New Room Password</label>
-                <input
-                  type="password"
-                  className="form-input"
-                  placeholder="Set Room Password"
-                  value={newPassword}
-                  onChange={(e) => setNewPassword(e.target.value)}
-                  required
-                />
-              </div>
-            </>
-          )}
+            )}
 
-          {roomStatus.hasPassword && (
-            <div className="form-group">
-              <label className="form-label">Password</label>
-              <input
-                type="password"
-                className="form-input"
-                placeholder="Enter room password"
-                value={password}
-                onChange={(e) => {
-                  setPassword(e.target.value);
-                  setError('');
-                }}
-                required
-                autoFocus
-              />
-            </div>
-          )}
+            <button
+              type="submit"
+              className={buttonVariants({ variant: 'ta', fullWidth: true })}
+              disabled={isLoading}
+            >
+              {isLoading ? 'Processing...' : (roomStatus.hasPassword ? 'Login' : 'Create & Login')}
+            </button>
+          </form>
 
-          <button type="submit" className="btn btn-marking" disabled={isLoading}>
-            {isLoading ? 'Processing...' : (roomStatus.hasPassword ? 'Login' : 'Create & Login')}
-          </button>
-        </form>
+          <div style={{ marginTop: '24px', textAlign: 'center' }}>
+            <a href="#" className="nav-link" style={{ display: 'inline-flex' }}>
+              ← Back to Home
+            </a>
+          </div>
 
-        <div style={{ marginTop: '24px', textAlign: 'center' }}>
-          <a href="#" className="nav-link" style={{ display: 'inline-flex' }}>
-            ← Back to Home
-          </a>
-        </div>
-
-        <div style={{ marginTop: '16px', display: 'flex', justifyContent: 'center', gap: '12px' }}>
-          <GitHubLink />
-          <ThemeToggle theme={theme} setTheme={setTheme} />
-        </div>
-      </div>
+          <div style={{ marginTop: '16px', display: 'flex', justifyContent: 'center', gap: '12px' }}>
+            <GitHubLink />
+            <ThemeToggle theme={theme} setTheme={setTheme} />
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }
