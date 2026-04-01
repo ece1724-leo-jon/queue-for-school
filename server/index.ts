@@ -6,6 +6,14 @@ import { createServer } from 'http';
 import { fileURLToPath } from 'url';
 import { Server, type Socket } from 'socket.io';
 import { v4 as uuidv4 } from 'uuid';
+import {
+  getRoomAnalytics,
+  markRoomInactive,
+  recordQueueEvent,
+  syncRoomRecords,
+  upsertRoomRecord,
+  upsertUserRecord,
+} from './db.js';
 
 type QueueType = 'marking' | 'question';
 type QueueSelection = QueueType | 'combined';
@@ -153,6 +161,14 @@ let isSaving = false;
 let saveScheduled = false;
 
 const userSockets = new Map<string, Set<string>>();
+
+const touchRoomRecord = (roomName: string, password: string | null = null, isActive = true): void => {
+  upsertRoomRecord({
+    name: roomName,
+    password,
+    isActive,
+  });
+};
 
 const createEmptyRoom = (): RoomData => ({
   marking: [],
@@ -305,6 +321,7 @@ const loadQueues = (): void => {
 const getRoom = (roomName: string): RoomData => {
   if (!rooms.has(roomName)) {
     rooms.set(roomName, createEmptyRoom());
+    touchRoomRecord(roomName);
   }
 
   return rooms.get(roomName)!;
@@ -500,6 +517,7 @@ const getQueryString = (value: unknown): string | null => {
 };
 
 loadQueues();
+syncRoomRecords(rooms.entries());
 
 io.on('connection', (socket: Socket) => {
   console.log(`Client connected: ${socket.id}`);
@@ -514,6 +532,10 @@ io.on('connection', (socket: Socket) => {
     currentUserId = userId;
     socket.join(room);
     registerUserSocket(userId, socket.id);
+    upsertUserRecord({
+      userId,
+      lastRoom: room,
+    });
     console.log(`User ${userId} registered in room ${room}`);
 
     if (!rooms.has(room)) return;
@@ -546,6 +568,7 @@ io.on('connection', (socket: Socket) => {
     if (!roomName || !userId || !name || !studentId) return;
 
     const room = getRoom(roomName);
+    touchRoomRecord(roomName, room.password);
 
     if (room.marking.some((entry) => entry.userId === userId)) {
       socket.emit('error', { message: 'You are already in the marking queue.' });
@@ -573,6 +596,25 @@ io.on('connection', (socket: Socket) => {
     };
 
     room.marking.push(entry);
+    upsertUserRecord({
+      userId,
+      displayName: name,
+      email: entry.email,
+      lastRoom: roomName,
+      role: 'student',
+    });
+    recordQueueEvent({
+      roomName,
+      userId,
+      entryId: entry.id,
+      queueType: 'marking',
+      eventType: 'joined',
+      status: entry.status,
+      payload: {
+        name,
+        studentId,
+      },
+    });
     saveQueues();
     broadcastQueues(roomName);
 
@@ -592,6 +634,7 @@ io.on('connection', (socket: Socket) => {
     if (!roomName || !userId || !name) return;
 
     const room = getRoom(roomName);
+    touchRoomRecord(roomName, room.password);
 
     if (room.question.some((entry) => entry.userId === userId)) {
       socket.emit('error', { message: 'You are already in the question queue.' });
@@ -620,6 +663,25 @@ io.on('connection', (socket: Socket) => {
     };
 
     room.question.push(entry);
+    upsertUserRecord({
+      userId,
+      displayName: name,
+      email: entry.email,
+      lastRoom: roomName,
+      role: 'student',
+    });
+    recordQueueEvent({
+      roomName,
+      userId,
+      entryId: entry.id,
+      queueType: 'question',
+      eventType: 'joined',
+      status: entry.status,
+      payload: {
+        name,
+        description: entry.description,
+      },
+    });
     saveQueues();
     broadcastQueues(roomName);
 
@@ -641,7 +703,15 @@ io.on('connection', (socket: Socket) => {
     const index = queue.findIndex((entry) => entry.id === entryId);
     if (index === -1) return;
 
-    queue.splice(index, 1);
+    const [removedEntry] = queue.splice(index, 1);
+    recordQueueEvent({
+      roomName,
+      userId,
+      entryId,
+      queueType: payload.queueType,
+      eventType: 'left',
+      status: removedEntry.status,
+    });
     saveQueues();
     emitToUser(userId, 'left-queue', { queueType: payload.queueType, entryId });
     broadcastQueues(roomName);
@@ -673,6 +743,20 @@ io.on('connection', (socket: Socket) => {
     }
 
     entry.followers.push({ userId, name });
+    upsertUserRecord({
+      userId,
+      displayName: name,
+      lastRoom: roomName,
+      role: 'student',
+    });
+    recordQueueEvent({
+      roomName,
+      userId,
+      entryId,
+      queueType: 'question',
+      eventType: 'followed',
+      status: entry.status,
+    });
     saveQueues();
     broadcastQueues(roomName);
     emitToUser(userId, 'following-question', { entryId });
@@ -692,6 +776,14 @@ io.on('connection', (socket: Socket) => {
     if (followerIndex === -1) return;
 
     entry.followers.splice(followerIndex, 1);
+    recordQueueEvent({
+      roomName,
+      userId,
+      entryId,
+      queueType: 'question',
+      eventType: 'unfollowed',
+      status: entry.status,
+    });
     saveQueues();
     broadcastQueues(roomName);
     emitToUser(userId, 'unfollowed-question', { entryId });
@@ -710,6 +802,15 @@ io.on('connection', (socket: Socket) => {
         : pushBackInQueue(room.question, entryId);
     if (!newPosition) return;
 
+    recordQueueEvent({
+      roomName,
+      userId,
+      entryId,
+      queueType: payload.queueType,
+      eventType: 'pushed_back',
+      status: 'waiting',
+      payload: { position: newPosition },
+    });
     saveQueues();
     broadcastQueues(roomName);
     emitToUser(userId, 'pushed-back', { queueType: payload.queueType, position: newPosition });
@@ -723,6 +824,12 @@ io.on('connection', (socket: Socket) => {
     }
 
     const room = getRoom(roomName);
+    upsertUserRecord({
+      userId: `ta:${roomName}`,
+      displayName: `TA ${roomName}`,
+      lastRoom: roomName,
+      role: 'ta',
+    });
     let selectedType: QueueType | null = payload.queueType === 'combined' ? null : payload.queueType;
     let entry: QueueEntry | null = null;
 
@@ -752,6 +859,14 @@ io.on('connection', (socket: Socket) => {
     if (!entry || !selectedType) return;
 
     entry.status = 'called';
+    recordQueueEvent({
+      roomName,
+      userId: entry.userId,
+      entryId: entry.id,
+      queueType: selectedType,
+      eventType: 'called',
+      status: entry.status,
+    });
     saveQueues();
     emitToUser(entry.userId, 'being-called', {
       queueType: selectedType,
@@ -780,6 +895,14 @@ io.on('connection', (socket: Socket) => {
     if (!entry || !realType) return;
 
     entry.status = 'called';
+    recordQueueEvent({
+      roomName,
+      userId: entry.userId,
+      entryId: entry.id,
+      queueType: realType,
+      eventType: 'called',
+      status: entry.status,
+    });
     saveQueues();
     emitToUser(entry.userId, 'being-called', {
       queueType: realType,
@@ -808,6 +931,14 @@ io.on('connection', (socket: Socket) => {
     if (!entry || !realType || entry.status !== 'called') return;
 
     entry.status = 'waiting';
+    recordQueueEvent({
+      roomName,
+      userId: entry.userId,
+      entryId: entry.id,
+      queueType: realType,
+      eventType: 'call_cancelled',
+      status: entry.status,
+    });
     saveQueues();
     emitToUser(entry.userId, 'pushed-back', {
       queueType: realType,
@@ -826,6 +957,14 @@ io.on('connection', (socket: Socket) => {
     if (!entry || !realType) return;
 
     entry.status = 'assisting';
+    recordQueueEvent({
+      roomName,
+      userId: entry.userId,
+      entryId: entry.id,
+      queueType: realType,
+      eventType: 'assisting_started',
+      status: entry.status,
+    });
     saveQueues();
     emitToUser(entry.userId, 'assisting-started', {
       queueType: realType,
@@ -856,6 +995,14 @@ io.on('connection', (socket: Socket) => {
       }
 
       assistingEntries.forEach((entry) => {
+        recordQueueEvent({
+          roomName,
+          userId: entry.userId,
+          entryId: entry.id,
+          queueType,
+          eventType: 'assistance_finished',
+          status: 'assisting',
+        });
         if (queueType === 'marking') {
           emitToUser(entry.userId, 'finished-assisting', {
             queueType,
@@ -886,6 +1033,14 @@ io.on('connection', (socket: Socket) => {
     if (index === -1) return;
 
     const [removed] = queue.splice(index, 1);
+    recordQueueEvent({
+      roomName,
+      userId: removed.userId,
+      entryId: removed.id,
+      queueType: payload.queueType,
+      eventType: 'removed',
+      status: removed.status,
+    });
     saveQueues();
     emitToUser(removed.userId, 'removed-from-queue', {
       queueType: payload.queueType,
@@ -899,8 +1054,19 @@ io.on('connection', (socket: Socket) => {
     if (!roomName) return;
 
     const room = getRoom(roomName);
+    const clearedEntries = [...room.marking, ...room.question];
     room.marking = [];
     room.question = [];
+    clearedEntries.forEach((entry) => {
+      recordQueueEvent({
+        roomName,
+        userId: entry.userId,
+        entryId: entry.id,
+        queueType: 'studentId' in entry ? 'marking' : 'question',
+        eventType: 'queue_cleared',
+        status: entry.status,
+      });
+    });
     saveQueues();
     broadcastQueues(roomName);
     io.to(roomName).emit('removed-from-queue', { message: 'Queue reset by TA.' });
@@ -910,7 +1076,12 @@ io.on('connection', (socket: Socket) => {
     const roomName = requireString(payload.room);
     if (!roomName || !rooms.has(roomName)) return;
 
+    recordQueueEvent({
+      roomName,
+      eventType: 'room_deleted',
+    });
     rooms.delete(roomName);
+    markRoomInactive(roomName);
     saveQueues();
     io.to(roomName).emit('room-deleted', { message: 'This room has been closed by the TA.' });
     io.in(roomName).socketsLeave(roomName);
@@ -965,6 +1136,15 @@ app.post('/api/claim-room', (req: Request<unknown, unknown, ClaimRoomBody>, res:
 
   const roomData = getRoom(room);
   roomData.password = optionalString(req.body.newPassword);
+  touchRoomRecord(room, roomData.password);
+  recordQueueEvent({
+    roomName: room,
+    userId: `ta:${room}`,
+    eventType: 'room_claimed',
+    payload: {
+      hasPassword: Boolean(roomData.password),
+    },
+  });
   saveQueues();
   res.json({ success: true });
 });
@@ -1011,6 +1191,21 @@ app.get('/api/user-status', (req: Request, res: Response) => {
     entryId: existingEntry.entry.id,
     status: existingEntry.entry.status,
   });
+});
+
+app.get('/api/room-analytics', (req: Request, res: Response) => {
+  const room = getQueryString(req.query.room);
+  if (!room) {
+    res.status(400).json({ error: 'Room required' });
+    return;
+  }
+
+  try {
+    res.json(getRoomAnalytics(room));
+  } catch (error) {
+    console.error('Error in /api/room-analytics:', error);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
 });
 
 if (fs.existsSync(DIST_PATH)) {
