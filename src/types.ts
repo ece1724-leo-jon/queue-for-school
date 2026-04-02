@@ -3,6 +3,20 @@
 export type QueueType = 'marking' | 'question';
 export type CombinedQueueType = QueueType | 'combined';
 export type EntryStatus = 'waiting' | 'called' | 'assisting';
+export type AuthRole = 'student' | 'ta';
+
+export interface AuthUser {
+  userId: string;
+  email: string;
+  displayName: string | null;
+  role: AuthRole;
+}
+
+export interface AuthSession {
+  token: string;
+  user: AuthUser;
+  expiresAt: string;
+}
 
 export interface Follower {
   userId: string;
@@ -72,7 +86,6 @@ export interface JoinData {
   studentId: string;
   email: string;
   description: string;
-  userId: string;
   attachment?: AttachmentMeta | null;
 }
 
