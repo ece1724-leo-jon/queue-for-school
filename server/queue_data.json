@@ -1,4 +1,22 @@
 {
-  "marking": [],
-  "question": []
+  "marking": {
+    "marking": [
+      {
+        "id": "344de371-d5f2-413f-ad09-e5b7646c8ea8",
+        "name": "12312",
+        "studentId": "1232",
+        "email": null,
+        "joinedAt": "2026-04-03T15:45:56.164Z",
+        "userId": "dc67b833-8341-4ac3-b0d0-3240bc3aeccc",
+        "status": "waiting"
+      }
+    ],
+    "question": [],
+    "password": null
+  },
+  "question": {
+    "marking": [],
+    "question": [],
+    "password": null
+  }
 }
