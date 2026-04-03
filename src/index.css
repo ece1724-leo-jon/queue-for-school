@@ -1,7 +1,7 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+@config "../tailwind.config.ts";
 
+@layer base {
 :root {
   /* Light mode colors (default) */
   --bg-primary: #f8fafc;
@@ -1496,3 +1496,4 @@ h6 {
     opacity: 1;
   }
 }
+} /* end @layer base */
