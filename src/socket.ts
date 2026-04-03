@@ -1,4 +1,5 @@
 import { io } from 'socket.io-client';
+import { getAuthToken } from './utils/auth';
 
 // Determine the socket URL:
 // 1. Use VITE_SOCKET_URL if explicitly set (for custom deployments)
@@ -23,12 +24,33 @@ if (typeof window !== 'undefined') {
 }
 
 export const socket = io(SOCKET_URL, {
-    autoConnect: true,
+    autoConnect: false,
     reconnection: true,
     reconnectionAttempts: Infinity,
     reconnectionDelay: 1000,
     reconnectionDelayMax: 5000,
+    auth: {
+        token: getAuthToken() ?? undefined,
+    },
 });
+
+export const setSocketAuthToken = (token: string | null): void => {
+    socket.auth = {
+        token: token ?? undefined,
+    };
+};
+
+export const connectSocket = (): void => {
+    if (!socket.connected) {
+        socket.connect();
+    }
+};
+
+export const disconnectSocket = (): void => {
+    if (socket.connected) {
+        socket.disconnect();
+    }
+};
 
 // Expose for E2E testing
 if (typeof window !== 'undefined') {

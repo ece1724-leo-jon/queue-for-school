@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import type { FormEvent, CSSProperties, ReactNode, MouseEvent as ReactMouseEvent } from 'react';
-import socket from './socket';
+import socket, { connectSocket, disconnectSocket, setSocketAuthToken } from './socket';
 import {
   requestNotificationPermission,
   sendNotification,
@@ -14,9 +14,10 @@ import {
   playMeTooSound
 } from './utils/sounds';
 import {
-  getUserId,
-  onUserDataChange
-} from './utils/userIdentity';
+  clearAuthSession,
+  getAuthSession,
+  saveAuthSession,
+} from './utils/auth';
 import './App.css';
 import { Badge } from './components/ui/badge';
 import { buttonVariants } from './components/ui/button';
@@ -36,6 +37,8 @@ import type {
   JoinData,
   AttachmentMeta,
   NotificationPermissionStatus,
+  AuthRole,
+  AuthSession,
   JoinedQueuePayload,
   LeftQueuePayload,
   TurnApproachingPayload,
@@ -61,6 +64,13 @@ const getApiBaseUrl = (): string => {
 };
 
 const API_BASE_URL = getApiBaseUrl();
+
+const getAuthHeaders = (session: AuthSession | null): HeadersInit =>
+  session?.token
+    ? {
+        Authorization: `Bearer ${session.token}`,
+      }
+    : {};
 
 // Format time ago
 const formatTimeAgo = (isoString: string): string => {
@@ -455,6 +465,9 @@ interface QueueCardProps {
   onRemove: (entryId: string) => void;
   onFollow: (entryId: string, inputName: string) => void;
   onUnfollow: (entryId: string) => void;
+  currentUserId: string;
+  currentUserEmail: string;
+  currentUserName: string;
 }
 
 function QueueCard({
@@ -478,21 +491,27 @@ function QueueCard({
   onPushBack,
   onRemove,
   onFollow,
-  onUnfollow
+  onUnfollow,
+  currentUserId,
+  currentUserEmail,
+  currentUserName,
 }: QueueCardProps) {
-  const [name, setName] = useState('');
+  const [name, setName] = useState(currentUserName);
   const [studentId, setStudentId] = useState('');
-  const [email, setEmail] = useState('');
+  const [email, setEmail] = useState(currentUserEmail);
   const [description, setDescription] = useState('');
   const [attachmentFile, setAttachmentFile] = useState<File | null>(null);
   const [attachmentError, setAttachmentError] = useState('');
   const [isJoining, setIsJoining] = useState(false);
   const [joinType, setJoinType] = useState<QueueType>('marking'); // For combined view joining
 
-  // Initialize userId
   useEffect(() => {
-    getUserId(); // Ensure userId exists
-  }, []);
+    setName(currentUserName);
+  }, [currentUserName]);
+
+  useEffect(() => {
+    setEmail(currentUserEmail);
+  }, [currentUserEmail]);
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -508,7 +527,6 @@ function QueueCard({
 
     try {
       let attachment: AttachmentMeta | null = null;
-      const userId = getUserId();
 
       if (effectiveType === 'question' && attachmentFile) {
         if (!room) {
@@ -518,11 +536,11 @@ function QueueCard({
         const formData = new FormData();
         formData.append('file', attachmentFile);
         formData.append('room', room);
-        formData.append('userId', userId);
         formData.append('queueType', effectiveType);
 
         const response = await fetch(`${API_BASE_URL}/api/attachments/upload`, {
           method: 'POST',
+          headers: getAuthHeaders(getAuthSession()),
           body: formData,
         });
 
@@ -537,9 +555,8 @@ function QueueCard({
       await onJoin(effectiveType)({
         name: name.trim(),
         studentId: studentId.trim(),
-        email: email.trim(),
+        email: email.trim() || currentUserEmail,
         description: description.trim(),
-        userId,
         attachment,
       });
       setDescription('');
@@ -660,7 +677,7 @@ function QueueCard({
               onRemove={onRemove}
               onCallSpecific={onCallSpecific}
               onCancelCall={onCancelCall}
-              currentUserId={getUserId()}
+              currentUserId={currentUserId}
               onFollow={onFollow}
               onUnfollow={onUnfollow}
               inputName={name}
@@ -1053,81 +1070,15 @@ interface TALoginPageProps {
 }
 
 function TALoginPage({ onLogin, theme, setTheme, room, setRoom }: TALoginPageProps) {
-  const [password, setPassword] = useState('');
-  const [masterPassword, setMasterPassword] = useState('');
-  const [newPassword, setNewPassword] = useState('');
-  const [error, setError] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-  const [roomStatus, setRoomStatus] = useState<{ checked: boolean; hasPassword: boolean }>({ checked: false, hasPassword: false });
-
-  useEffect(() => {
-    if (!room) {
-      setRoomStatus({ checked: true, hasPassword: false });
-      return;
-    }
-    fetch(`${API_BASE_URL}/api/room-status?room=${encodeURIComponent(room)}`)
-      .then(res => res.json())
-      .then(data => {
-        setRoomStatus({ checked: true, hasPassword: data.hasPassword });
-      })
-      .catch(err => {
-        console.error(err);
-        setRoomStatus({ checked: true, hasPassword: false }); // Fallback
-      });
-  }, [room]);
-
-  const handleSubmit = async (e: FormEvent) => {
-    e.preventDefault();
-    setIsLoading(true);
-    setError('');
-
-    try {
-      if (roomStatus.hasPassword) {
-        const response = await fetch(`${API_BASE_URL}/api/room-auth`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ room, password }),
-        });
-        const data = await response.json();
-        if (data.success) {
-          onLogin();
-        } else {
-          setError(data.message || 'Incorrect password');
-        }
-      } else {
-        const response = await fetch(`${API_BASE_URL}/api/claim-room`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ room, masterPassword, newPassword }),
-        });
-        const data = await response.json();
-        if (data.success) {
-          onLogin();
-        } else {
-          setError(data.message || 'Incorrect Master Password');
-        }
-      }
-    } catch (err) {
-      setError('Connection error');
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
   const [manualRoomInput, setManualRoomInput] = useState('');
 
-  // Handle manual room entry (SPA navigation without hard refresh)
   const handleRoomSubmit = (e: FormEvent) => {
     e.preventDefault();
     if (manualRoomInput.trim()) {
       const newRoom = manualRoomInput.trim();
-      // Update URL without refresh
       const newUrl = `${window.location.pathname}?ta=${encodeURIComponent(newRoom)}#ta`;
       window.history.pushState({}, '', newUrl);
-      // Update room state
-      if (setRoom) {
-        setRoom(newRoom);
-      }
+      setRoom(newRoom);
     }
   };
 
@@ -1176,84 +1127,23 @@ function TALoginPage({ onLogin, theme, setTheme, room, setRoom }: TALoginPagePro
     );
   }
 
-  if (!roomStatus.checked) {
-    return (
-      <div className="login-page">
-        <Card className="login-card" style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '60px' }}>
-          <span className="spinner"></span>
-        </Card>
-      </div>
-    );
-  }
-
   return (
     <div className="login-page">
-      <Card className="login-card">
+      <Card className="login-card border-slate-200/80">
         <CardHeader>
-          <Badge variant="ta" className="w-fit">{roomStatus.hasPassword ? 'Protected Room' : 'Room Setup'}</Badge>
-          <CardTitle>{roomStatus.hasPassword ? 'TA Login' : 'Setup Room'}</CardTitle>
-          <CardDescription>
-            {roomStatus.hasPassword ? 'Enter the room password' : 'Create a password for this room'}
-          </CardDescription>
+          <Badge variant="ta" className="w-fit">TA dashboard</Badge>
+          <CardTitle>Manage {room}</CardTitle>
+          <CardDescription>OTP sign-in is already complete. Continue to the dashboard.</CardDescription>
         </CardHeader>
 
         <CardContent className="space-y-6">
-          {error && <div className="login-error">{error}</div>}
-
-          <form onSubmit={handleSubmit} className="space-y-4">
-            {!roomStatus.hasPassword && (
-              <>
-                <div className="space-y-2">
-                  <Label htmlFor="master-password">Master Password</Label>
-                  <Input
-                    id="master-password"
-                    type="password"
-                    placeholder="Enter Master Password"
-                    value={masterPassword}
-                    onChange={(e) => setMasterPassword(e.target.value)}
-                    required
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="new-room-password">New Room Password</Label>
-                  <Input
-                    id="new-room-password"
-                    type="password"
-                    placeholder="Set Room Password"
-                    value={newPassword}
-                    onChange={(e) => setNewPassword(e.target.value)}
-                    required
-                  />
-                </div>
-              </>
-            )}
-
-            {roomStatus.hasPassword && (
-              <div className="space-y-2">
-                <Label htmlFor="room-password">Password</Label>
-                <Input
-                  id="room-password"
-                  type="password"
-                  placeholder="Enter room password"
-                  value={password}
-                  onChange={(e) => {
-                    setPassword(e.target.value);
-                    setError('');
-                  }}
-                  required
-                  autoFocus
-                />
-              </div>
-            )}
-
-            <button
-              type="submit"
-              className={buttonVariants({ variant: 'ta', fullWidth: true })}
-              disabled={isLoading}
-            >
-              {isLoading ? 'Processing...' : (roomStatus.hasPassword ? 'Login' : 'Create & Login')}
-            </button>
-          </form>
+          <button
+            type="button"
+            className={buttonVariants({ variant: 'ta', fullWidth: true })}
+            onClick={onLogin}
+          >
+            Open dashboard
+          </button>
 
           <div style={{ marginTop: '24px', textAlign: 'center' }}>
             <a href="#" className="nav-link" style={{ display: 'inline-flex' }}>
@@ -1276,6 +1166,7 @@ interface StudentViewProps {
   queues: Queues;
   myEntries: MyEntries;
   isConnected: boolean;
+  authSession: AuthSession;
   theme: string;
   setTheme: (t: string) => void;
   notificationStatus: NotificationPermissionStatus;
@@ -1292,6 +1183,7 @@ function StudentView({
   queues,
   myEntries,
   isConnected,
+  authSession,
   theme,
   setTheme,
   notificationStatus,
@@ -1345,6 +1237,9 @@ function StudentView({
           onRemove={() => { }}
           onFollow={followQuestion}
           onUnfollow={unfollowQuestion}
+          currentUserId={authSession.user.userId}
+          currentUserEmail={authSession.user.email}
+          currentUserName={authSession.user.displayName ?? ''}
         />
 
         <QueueCard
@@ -1368,6 +1263,9 @@ function StudentView({
           onRemove={() => { }}
           onFollow={followQuestion}
           onUnfollow={unfollowQuestion}
+          currentUserId={authSession.user.userId}
+          currentUserEmail={authSession.user.email}
+          currentUserName={authSession.user.displayName ?? ''}
         />
       </main>
     </div>
@@ -1378,6 +1276,7 @@ function StudentView({
 interface TAViewProps {
   queues: Queues;
   isConnected: boolean;
+  authSession: AuthSession;
   theme: string;
   setTheme: (t: string) => void;
   onLogout: () => void;
@@ -1395,6 +1294,7 @@ interface TAViewProps {
 function TAView({
   queues,
   isConnected,
+  authSession,
   theme,
   setTheme,
   onLogout,
@@ -1471,6 +1371,9 @@ function TAView({
           onRemove={taRemove('combined')}
           onFollow={() => { }}
           onUnfollow={() => { }}
+          currentUserId={authSession.user.userId}
+          currentUserEmail={authSession.user.email}
+          currentUserName={authSession.user.displayName ?? ''}
         />
 
         <div style={{ marginTop: '40px', padding: '20px', border: '1px solid var(--danger)', borderRadius: 'var(--radius-md)', opacity: 0.8 }}>
@@ -1488,6 +1391,230 @@ function TAView({
           </div>
         </div>
       </main>
+    </div>
+  );
+}
+
+interface AuthGateProps {
+  theme: string;
+  setTheme: (t: string) => void;
+  desiredRole: AuthRole;
+  onAuthenticated: (session: AuthSession) => void;
+}
+
+function AuthGate({ theme, setTheme, desiredRole, onAuthenticated }: AuthGateProps) {
+  const [step, setStep] = useState<'email' | 'otp'>('email');
+  const [email, setEmail] = useState('');
+  const [role, setRole] = useState<AuthRole>(desiredRole);
+  const [displayName, setDisplayName] = useState('');
+  const [code, setCode] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
+
+  useEffect(() => {
+    setRole(desiredRole);
+  }, [desiredRole]);
+
+  const handleRequestOtp = async (event: FormEvent) => {
+    event.preventDefault();
+    setIsLoading(true);
+    setError('');
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/auth/request-otp`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, role }),
+      });
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to send OTP');
+      }
+
+      setMessage(`Code sent to ${email.trim().toLowerCase()}`);
+      setStep('otp');
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Failed to send OTP');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleVerifyOtp = async (event: FormEvent) => {
+    event.preventDefault();
+    setIsLoading(true);
+    setError('');
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/auth/verify-otp`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email,
+          code,
+          displayName,
+        }),
+      });
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'OTP verification failed');
+      }
+
+      const session = {
+        token: data.token as string,
+        user: data.session.user,
+        expiresAt: data.session.expiresAt as string,
+      } satisfies AuthSession;
+
+      saveAuthSession(session);
+      onAuthenticated(session);
+    } catch (verifyError) {
+      setError(verifyError instanceof Error ? verifyError.message : 'OTP verification failed');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return (
+    <div className="login-page">
+      <Card className="login-card border-slate-200/80">
+        <CardHeader>
+          <Badge variant={role === 'ta' ? 'ta' : 'student'} className="w-fit">
+            {role === 'ta' ? 'TA access' : 'Student access'}
+          </Badge>
+          <CardTitle>UofT sign in</CardTitle>
+          <CardDescription>Email OTP for queue access.</CardDescription>
+        </CardHeader>
+
+        <CardContent className="space-y-5">
+          {error && <div className="login-error">{error}</div>}
+          {message && <div className="login-success">{message}</div>}
+
+          {step === 'email' ? (
+            <form onSubmit={handleRequestOtp} className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="auth-email">UofT Email</Label>
+                <Input
+                  id="auth-email"
+                  type="email"
+                  value={email}
+                  onChange={(event) => setEmail(event.target.value)}
+                  placeholder="name@mail.utoronto.ca"
+                  autoFocus
+                  required
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label>Role</Label>
+                <div style={{ display: 'flex', gap: '12px' }}>
+                  <button
+                    type="button"
+                    className={buttonVariants({ variant: role === 'student' ? 'student' : 'outline' })}
+                    onClick={() => setRole('student')}
+                  >
+                    Student
+                  </button>
+                  <button
+                    type="button"
+                    className={buttonVariants({ variant: role === 'ta' ? 'ta' : 'outline' })}
+                    onClick={() => setRole('ta')}
+                  >
+                    TA
+                  </button>
+                </div>
+              </div>
+
+              <button type="submit" className={buttonVariants({ fullWidth: true })} disabled={isLoading}>
+                {isLoading ? 'Sending...' : 'Send code'}
+              </button>
+            </form>
+          ) : (
+            <form onSubmit={handleVerifyOtp} className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="auth-code">OTP</Label>
+                <Input
+                  id="auth-code"
+                  type="text"
+                  inputMode="numeric"
+                  value={code}
+                  onChange={(event) => setCode(event.target.value)}
+                  placeholder="6-digit code"
+                  autoFocus
+                  required
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="auth-display-name">Display Name</Label>
+                <Input
+                  id="auth-display-name"
+                  type="text"
+                  value={displayName}
+                  onChange={(event) => setDisplayName(event.target.value)}
+                  placeholder="Optional"
+                />
+              </div>
+
+              <button type="submit" className={buttonVariants({ fullWidth: true })} disabled={isLoading}>
+                {isLoading ? 'Verifying...' : 'Verify and continue'}
+              </button>
+
+              <button
+                type="button"
+                className={buttonVariants({ variant: 'outline', fullWidth: true })}
+                onClick={() => {
+                  setStep('email');
+                  setCode('');
+                  setError('');
+                }}
+              >
+                Back
+              </button>
+            </form>
+          )}
+
+          <div style={{ display: 'flex', justifyContent: 'center', gap: '12px' }}>
+            <GitHubLink />
+            <ThemeToggle theme={theme} setTheme={setTheme} />
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function AccessDeniedPage({
+  theme,
+  setTheme,
+  onLogout,
+}: {
+  theme: string;
+  setTheme: (t: string) => void;
+  onLogout: () => void;
+}) {
+  return (
+    <div className="login-page">
+      <Card className="login-card border-slate-200/80">
+        <CardHeader>
+          <Badge variant="ta" className="w-fit">TA only</Badge>
+          <CardTitle>TA access required</CardTitle>
+          <CardDescription>This account cannot manage rooms.</CardDescription>
+        </CardHeader>
+
+        <CardContent className="space-y-4">
+          <button className={buttonVariants({ variant: 'outline', fullWidth: true })} onClick={onLogout}>
+            Sign out
+          </button>
+          <div style={{ display: 'flex', justifyContent: 'center', gap: '12px' }}>
+            <GitHubLink />
+            <ThemeToggle theme={theme} setTheme={setTheme} />
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }
@@ -1547,9 +1674,8 @@ function App() {
     return saved || 'light';
   });
   const [page, setPage] = useState<PageType>('home');
-  const [isTAAuthenticated, setIsTAAuthenticated] = useState(() => {
-    return sessionStorage.getItem('ta_auth') === 'true';
-  });
+  const [authSession, setAuthSession] = useState<AuthSession | null>(() => getAuthSession());
+  const [authReady, setAuthReady] = useState(false);
   const [turnAlert, setTurnAlert] = useState<TurnAlert | null>(null);
   const [successOverlay, setSuccessOverlay] = useState<string | null>(null);
 
@@ -1562,6 +1688,54 @@ function App() {
     localStorage.setItem('theme', theme);
   }, [theme]);
 
+  useEffect(() => {
+    const storedSession = getAuthSession();
+    if (!storedSession) {
+      setAuthReady(true);
+      return;
+    }
+
+    fetch(`${API_BASE_URL}/api/auth/session`, {
+      headers: {
+        ...getAuthHeaders(storedSession),
+      },
+    })
+      .then(async (response) => {
+        if (!response.ok) {
+          throw new Error('Session expired');
+        }
+
+        const data = await response.json();
+        const nextSession = {
+          token: storedSession.token,
+          user: data.session.user,
+          expiresAt: data.session.expiresAt,
+        } satisfies AuthSession;
+
+        saveAuthSession(nextSession);
+        setAuthSession(nextSession);
+      })
+      .catch(() => {
+        clearAuthSession();
+        setAuthSession(null);
+      })
+      .finally(() => {
+        setAuthReady(true);
+      });
+  }, []);
+
+  useEffect(() => {
+    setSocketAuthToken(authSession?.token ?? null);
+
+    if (authSession) {
+      connectSocket();
+      return;
+    }
+
+    disconnectSocket();
+    setIsConnected(false);
+  }, [authSession]);
+
   // Handle hash-based routing
   useEffect(() => {
     const handleHashChange = () => {
@@ -1569,7 +1743,7 @@ function App() {
       if (hash === 'student') {
         setPage('student');
       } else if (hash === 'ta') {
-        setPage(isTAAuthenticated ? 'ta' : 'ta-login');
+        setPage(authSession?.user.role === 'ta' ? 'ta' : 'ta-login');
       } else if (hash === 'all') {
         setPage('all');
       } else {
@@ -1580,20 +1754,7 @@ function App() {
     handleHashChange();
     window.addEventListener('hashchange', handleHashChange);
     return () => window.removeEventListener('hashchange', handleHashChange);
-  }, [isTAAuthenticated]);
-
-  // Sync TA Auth to session storage
-  useEffect(() => {
-    sessionStorage.setItem('ta_auth', String(isTAAuthenticated));
-  }, [isTAAuthenticated]);
-
-  // Listen for user data changes from other tabs
-  useEffect(() => {
-    return onUserDataChange(() => {
-      // Logic if we were saving user entries in localStorage
-      // Currently we rely on server pushing state
-    });
-  }, []);
+  }, [authSession]);
 
   const removeToast = useCallback((id: number) => {
     // Mark as exiting first
@@ -1615,13 +1776,12 @@ function App() {
 
   // Socket event handlers
   useEffect(() => {
-    if (!room) return; // Don't setup socket listeners if no room
+    if (!room || !authSession) return;
 
     const onConnect = () => {
       setIsConnected(true);
       addToast('Connected', 'You are now connected to the queue server.', 'success');
-      // Re-register user on reconnect
-      socket.emit('register-user', { userId: getUserId(), room });
+      socket.emit('register-user', { room });
     };
 
     const onDisconnect = () => {
@@ -1632,8 +1792,7 @@ function App() {
     const onQueuesUpdate = (data: Queues) => {
       setQueues(data);
 
-      // Update status in myEntries if user is in queue
-      const currentUserId = getUserId();
+      const currentUserId = authSession.user.userId;
 
       setMyEntries(prev => {
         const next = { ...prev };
@@ -1794,7 +1953,7 @@ function App() {
 
     if (socket.connected) {
       setIsConnected(true);
-      socket.emit('register-user', { userId: getUserId(), room });
+      socket.emit('register-user', { room });
     }
 
     return () => {
@@ -1813,7 +1972,7 @@ function App() {
       socket.off('room-deleted', onRoomDeleted);
       socket.off('error', onError);
     };
-  }, [addToast, room]);
+  }, [addToast, authSession, room]);
 
   // If no room is provided and not viewing the "all" page, show error page
   if (!room && page !== 'all') {
@@ -1852,7 +2011,6 @@ function App() {
     socket.emit('leave-queue', {
       queueType,
       entryId,
-      userId: getUserId(),
       room
     });
   };
@@ -1861,7 +2019,6 @@ function App() {
     socket.emit('push-back', {
       queueType,
       entryId,
-      userId: getUserId(),
       room
     });
     // Optimistic toast
@@ -1869,12 +2026,17 @@ function App() {
   };
 
   const followQuestion = (entryId: string, inputName: string) => {
-    const userId = getUserId();
+    const userId = authSession?.user.userId;
+    if (!userId) return;
 
     // Try to get user's name from: 1) input box, 2) existing queue entry, 3) localStorage
     const userEntry = queues.marking.find(e => e.userId === userId) ||
       queues.question.find(e => e.userId === userId);
-    const name = inputName?.trim() || userEntry?.name || localStorage.getItem('queue_user_name');
+    const name =
+      inputName?.trim() ||
+      userEntry?.name ||
+      authSession?.user.displayName ||
+      localStorage.getItem('queue_user_name');
 
     if (!name) {
       addToast('Name Required', 'Please enter your name in the form first.', 'error');
@@ -1886,7 +2048,6 @@ function App() {
 
     socket.emit('follow-question', {
       entryId,
-      userId,
       name,
       room
     });
@@ -1897,7 +2058,6 @@ function App() {
   const unfollowQuestion = (entryId: string) => {
     socket.emit('unfollow-question', {
       entryId,
-      userId: getUserId(),
       room
     });
     playPopSound();
@@ -1942,8 +2102,7 @@ function App() {
   const taDeleteRoom = () => {
     if (window.confirm('Are you sure you want to PERMANENTLY DELETE this room? This cannot be undone and will disconnect everyone.')) {
       socket.emit('ta-delete-room', { room });
-      // Clean up local
-      handleTALogout();
+      handleLogout();
       setSuccessOverlay('Room Deleted');
       setTimeout(() => {
         window.location.href = '/';
@@ -1964,13 +2123,30 @@ function App() {
   };
 
   const handleTALogin = () => {
-    setIsTAAuthenticated(true);
     setPage('ta');
     window.location.hash = 'ta';
   };
 
-  const handleTALogout = () => {
-    setIsTAAuthenticated(false);
+  const handleLogout = async () => {
+    if (authSession) {
+      try {
+        await fetch(`${API_BASE_URL}/api/auth/logout`, {
+          method: 'POST',
+          headers: {
+            ...getAuthHeaders(authSession),
+          },
+        });
+      } catch {
+        // Ignore logout network failures and clear local state anyway.
+      }
+    }
+
+    clearAuthSession();
+    setAuthSession(null);
+    setQueues({ marking: [], question: [] });
+    setMyEntries({ marking: null, question: null });
+    setTurnAlert(null);
+    setSuccessOverlay(null);
     setPage('home');
     window.location.hash = '';
   };
@@ -1981,6 +2157,38 @@ function App() {
     playSuccessSound(); // Confirmation sound
   };
 
+  if (!authReady) {
+    return (
+      <div className="login-page">
+        <Card className="login-card" style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '60px' }}>
+          <span className="spinner"></span>
+        </Card>
+      </div>
+    );
+  }
+
+  const desiredRole: AuthRole = page === 'ta' || page === 'ta-login' ? 'ta' : 'student';
+
+  if (!authSession) {
+    return (
+      <AuthGate
+        theme={theme}
+        setTheme={setTheme}
+        desiredRole={desiredRole}
+        onAuthenticated={(session) => {
+          setAuthSession(session);
+          if (session.user.role === 'ta' && (page === 'ta' || page === 'ta-login')) {
+            setPage('ta');
+            window.location.hash = 'ta';
+          } else if (page !== 'all') {
+            setPage('student');
+            window.location.hash = 'student';
+          }
+        }}
+      />
+    );
+  }
+
   // Render based on page
   let content: ReactNode;
   switch (page) {
@@ -1990,6 +2198,7 @@ function App() {
           queues={queues}
           myEntries={myEntries}
           isConnected={isConnected}
+          authSession={authSession}
           theme={theme}
           setTheme={setTheme}
           notificationStatus={notificationStatus}
@@ -2004,35 +2213,40 @@ function App() {
       );
       break;
     case 'ta-login':
-      content = (
-        <TALoginPage
-          onLogin={handleTALogin}
-          theme={theme}
-          setTheme={setTheme}
-          room={room}
-          setRoom={setRoom}
-        />
-      );
+      content = authSession.user.role === 'ta'
+        ? (
+          <TALoginPage
+            onLogin={handleTALogin}
+            theme={theme}
+            setTheme={setTheme}
+            room={room}
+            setRoom={setRoom}
+          />
+        )
+        : <AccessDeniedPage theme={theme} setTheme={setTheme} onLogout={handleLogout} />;
       break;
     case 'ta':
-      content = (
-        <TAView
-          queues={queues}
-          isConnected={isConnected}
-          theme={theme}
-          setTheme={setTheme}
-          onLogout={handleTALogout}
-          taCall={taCall}
-          taCallSpecific={taCallSpecific}
-          taCancelCall={taCancelCall}
-          taStartAssisting={taStartAssisting}
-          taNext={taNext}
-          taRemove={taRemove}
-          taClearAll={taClearAll}
-          taDeleteRoom={taDeleteRoom}
-          room={room}
-        />
-      );
+      content = authSession.user.role === 'ta'
+        ? (
+          <TAView
+            queues={queues}
+            isConnected={isConnected}
+            authSession={authSession}
+            theme={theme}
+            setTheme={setTheme}
+            onLogout={handleLogout}
+            taCall={taCall}
+            taCallSpecific={taCallSpecific}
+            taCancelCall={taCancelCall}
+            taStartAssisting={taStartAssisting}
+            taNext={taNext}
+            taRemove={taRemove}
+            taClearAll={taClearAll}
+            taDeleteRoom={taDeleteRoom}
+            room={room}
+          />
+        )
+        : <AccessDeniedPage theme={theme} setTheme={setTheme} onLogout={handleLogout} />;
       break;
     case 'all':
       content = <AllRoomsView theme={theme} setTheme={setTheme} setRoom={setRoom} />;
@@ -2045,7 +2259,7 @@ function App() {
     <>
       {content}
       <Toast toasts={toasts} removeToast={removeToast} />
-      {turnAlert && !isTAAuthenticated && (
+      {turnAlert && authSession.user.role !== 'ta' && (
         <FullWindowAlert
           message={turnAlert.message}
           queueType={turnAlert.queueType}

@@ -44,6 +44,23 @@ export interface AttachmentRecordInput {
   storageKey: string;
 }
 
+export interface AuthOtpInput {
+  email: string;
+  role: DBRole;
+  otpHash: string;
+  expiresAt: string;
+}
+
+export interface AuthSessionInput {
+  id: string;
+  userId: string;
+  email: string;
+  displayName: string | null;
+  role: DBRole;
+  tokenHash: string;
+  expiresAt: string;
+}
+
 interface AttachmentRow {
   id: string;
   room_name: string;
@@ -73,6 +90,38 @@ interface EventRow {
   created_at: string;
 }
 
+interface UserRow {
+  user_id: string;
+  display_name: string | null;
+  email: string | null;
+  last_room: string | null;
+  role: string | null;
+  last_seen_at: string;
+}
+
+interface AuthOtpRow {
+  id: number;
+  email: string;
+  role: string;
+  otp_hash: string;
+  expires_at: string;
+  consumed_at: string | null;
+  created_at: string;
+}
+
+interface AuthSessionRow {
+  id: string;
+  user_id: string;
+  email: string;
+  display_name: string | null;
+  role: string;
+  token_hash: string;
+  expires_at: string;
+  revoked_at: string | null;
+  created_at: string;
+  last_used_at: string;
+}
+
 const db = new Database(DB_FILE);
 db.pragma('journal_mode = WAL');
 
@@ -93,6 +142,9 @@ db.exec(`
     role TEXT,
     last_seen_at TEXT NOT NULL
   );
+
+  CREATE INDEX IF NOT EXISTS idx_users_email
+    ON users(email);
 
   CREATE TABLE IF NOT EXISTS queue_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -126,6 +178,35 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_attachments_room_created
     ON attachments(room_name, created_at DESC);
+
+  CREATE TABLE IF NOT EXISTS auth_otps (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    email TEXT NOT NULL,
+    role TEXT NOT NULL,
+    otp_hash TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    consumed_at TEXT,
+    created_at TEXT NOT NULL
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_auth_otps_email_created
+    ON auth_otps(email, created_at DESC);
+
+  CREATE TABLE IF NOT EXISTS auth_sessions (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    email TEXT NOT NULL,
+    display_name TEXT,
+    role TEXT NOT NULL,
+    token_hash TEXT NOT NULL UNIQUE,
+    expires_at TEXT NOT NULL,
+    revoked_at TEXT,
+    created_at TEXT NOT NULL,
+    last_used_at TEXT NOT NULL
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_auth_sessions_user
+    ON auth_sessions(user_id, created_at DESC);
 `);
 
 const upsertRoomStatement = db.prepare(`
@@ -146,6 +227,13 @@ const upsertUserStatement = db.prepare(`
     last_room = COALESCE(excluded.last_room, users.last_room),
     role = COALESCE(excluded.role, users.role),
     last_seen_at = excluded.last_seen_at
+`);
+
+const findUserByEmailStatement = db.prepare(`
+  SELECT user_id, display_name, email, last_room, role, last_seen_at
+  FROM users
+  WHERE lower(email) = lower(?)
+  LIMIT 1
 `);
 
 const insertQueueEventStatement = db.prepare(`
@@ -223,6 +311,93 @@ const recentEventsStatement = db.prepare(`
   LIMIT ?
 `);
 
+const invalidateOtpsStatement = db.prepare(`
+  UPDATE auth_otps
+  SET consumed_at = @consumed_at
+  WHERE lower(email) = lower(@email)
+    AND consumed_at IS NULL
+`);
+
+const insertOtpStatement = db.prepare(`
+  INSERT INTO auth_otps (
+    email,
+    role,
+    otp_hash,
+    expires_at,
+    created_at
+  )
+  VALUES (
+    @email,
+    @role,
+    @otp_hash,
+    @expires_at,
+    @created_at
+  )
+`);
+
+const getMatchingOtpStatement = db.prepare(`
+  SELECT id, email, role, otp_hash, expires_at, consumed_at, created_at
+  FROM auth_otps
+  WHERE lower(email) = lower(?)
+    AND otp_hash = ?
+    AND consumed_at IS NULL
+  ORDER BY created_at DESC
+  LIMIT 1
+`);
+
+const consumeOtpStatement = db.prepare(`
+  UPDATE auth_otps
+  SET consumed_at = @consumed_at
+  WHERE id = @id
+`);
+
+const insertSessionStatement = db.prepare(`
+  INSERT INTO auth_sessions (
+    id,
+    user_id,
+    email,
+    display_name,
+    role,
+    token_hash,
+    expires_at,
+    created_at,
+    last_used_at
+  )
+  VALUES (
+    @id,
+    @user_id,
+    @email,
+    @display_name,
+    @role,
+    @token_hash,
+    @expires_at,
+    @created_at,
+    @last_used_at
+  )
+`);
+
+const getSessionByTokenHashStatement = db.prepare(`
+  SELECT id, user_id, email, display_name, role, token_hash, expires_at, revoked_at, created_at, last_used_at
+  FROM auth_sessions
+  WHERE token_hash = ?
+    AND revoked_at IS NULL
+    AND expires_at > ?
+  LIMIT 1
+`);
+
+const touchSessionStatement = db.prepare(`
+  UPDATE auth_sessions
+  SET last_used_at = @last_used_at
+  WHERE token_hash = @token_hash
+`);
+
+const revokeSessionStatement = db.prepare(`
+  UPDATE auth_sessions
+  SET revoked_at = @revoked_at
+  WHERE token_hash = @token_hash
+    AND revoked_at IS NULL
+`);
+
 export const upsertRoomRecord = (input: RoomRecordInput): void => {
   const timestamp = new Date().toISOString();
   upsertRoomStatement.run({
@@ -261,6 +436,22 @@ export const upsertUserRecord = (input: UserRecordInput): void => {
     role: input.role ?? null,
     last_seen_at: new Date().toISOString(),
   });
+};
+
+export const findUserByEmail = (email: string) => {
+  const row = findUserByEmailStatement.get(email) as UserRow | undefined;
+  if (!row) {
+    return null;
+  }
+
+  return {
+    userId: row.user_id,
+    displayName: row.display_name,
+    email: row.email,
+    lastRoom: row.last_room,
+    role: (row.role ?? null) as DBRole | null,
+    lastSeenAt: row.last_seen_at,
+  };
 };
 
 export const recordQueueEvent = (input: QueueEventInput): void => {
@@ -326,4 +517,95 @@ export const getAttachmentRecord = (id: string) => {
     storageKey: row.storage_key,
     createdAt: row.created_at,
   };
+};
+
+export const createOtpRecord = (input: AuthOtpInput): void => {
+  const consumedAt = new Date().toISOString();
+  invalidateOtpsStatement.run({
+    email: input.email,
+    consumed_at: consumedAt,
+  });
+
+  insertOtpStatement.run({
+    email: input.email,
+    role: input.role,
+    otp_hash: input.otpHash,
+    expires_at: input.expiresAt,
+    created_at: consumedAt,
+  });
+};
+
+export const consumeOtpRecord = (email: string, otpHash: string) => {
+  const row = getMatchingOtpStatement.get(email, otpHash) as AuthOtpRow | undefined;
+  if (!row) {
+    return null;
+  }
+
+  if (new Date(row.expires_at).getTime() <= Date.now()) {
+    return null;
+  }
+
+  consumeOtpStatement.run({
+    id: row.id,
+    consumed_at: new Date().toISOString(),
+  });
+
+  return {
+    id: row.id,
+    email: row.email,
+    role: row.role as DBRole,
+    expiresAt: row.expires_at,
+    createdAt: row.created_at,
+  };
+};
+
+export const createAuthSession = (input: AuthSessionInput): void => {
+  const timestamp = new Date().toISOString();
+  insertSessionStatement.run({
+    id: input.id,
+    user_id: input.userId,
+    email: input.email,
+    display_name: input.displayName,
+    role: input.role,
+    token_hash: input.tokenHash,
+    expires_at: input.expiresAt,
+    created_at: timestamp,
+    last_used_at: timestamp,
+  });
+};
+
+export const getAuthSessionByTokenHash = (tokenHash: string) => {
+  const row = getSessionByTokenHashStatement.get(
+    tokenHash,
+    new Date().toISOString(),
+  ) as AuthSessionRow | undefined;
+
+  if (!row) {
+    return null;
+  }
+
+  touchSessionStatement.run({
+    token_hash: tokenHash,
+    last_used_at: new Date().toISOString(),
+  });
+
+  return {
+    id: row.id,
+    userId: row.user_id,
+    email: row.email,
+    displayName: row.display_name,
+    role: row.role as DBRole,
+    tokenHash: row.token_hash,
+    expiresAt: row.expires_at,
+    revokedAt: row.revoked_at,
+    createdAt: row.created_at,
+    lastUsedAt: row.last_used_at,
+  };
+};
+
+export const revokeAuthSession = (tokenHash: string): void => {
+  revokeSessionStatement.run({
+    token_hash: tokenHash,
+    revoked_at: new Date().toISOString(),
+  });
 };
