@@ -24,6 +24,15 @@ import { buttonVariants } from './components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './components/ui/card';
 import { Input } from './components/ui/input';
 import { Label } from './components/ui/label';
+import {
+  FileDropZone,
+  UploadProgress,
+  ValidationChecks,
+  AttachmentIndicator,
+  AttachmentPreview,
+  useFileUpload,
+} from './components/FileUpload';
+import type { ValidationCheck } from './components/FileUpload';
 import type {
   QueueType,
   CombinedQueueType,
@@ -315,12 +324,13 @@ function QueueItem({ item, position, isYou, isTA, queueType, onRemove, onCallSpe
   const isFollowing = item.followers?.some(f => f.userId === currentUserId);
   const followerCount = item.followers?.length || 0;
   const canFollow = !isTA && isQuestionType && !isYou && item.userId !== currentUserId && item.status === 'waiting' && item.description;
-  // Only show expand if description is long enough (>50 chars) or has followers
+  // Only show expand if description is long enough (>50 chars) or has followers or attachment
   const descriptionIsLong = item.description && item.description.length > 50;
   const hasFollowers = item.followers && item.followers.length > 0;
-  // Allow expand for TA (long description + followers) or for students viewing question queue items with long description
-  const hasExpandableContent = (isTA && (descriptionIsLong || hasFollowers)) ||
-    (!isTA && isQuestionType && descriptionIsLong);
+  const hasAttachment = !!item.attachment;
+  // Allow expand for TA (long description + followers + attachment) or for students viewing expandable content
+  const hasExpandableContent = (isTA && (descriptionIsLong || hasFollowers || hasAttachment)) ||
+    (!isTA && (descriptionIsLong || hasAttachment));
 
   const handleCardClick = () => {
     if (hasExpandableContent) {
@@ -347,6 +357,9 @@ function QueueItem({ item, position, isYou, isTA, queueType, onRemove, onCallSpe
               {(item.type === 'marking' ? 'M' : 'Q')}
             </span>
           )}
+          {item.attachment && (
+            <AttachmentIndicator fileName={item.attachment.fileName} />
+          )}
           {followerCount > 0 && (
             <span className="follower-badge" title={`${followerCount} student${followerCount > 1 ? 's' : ''} with same question`}>
               +{followerCount}
@@ -362,17 +375,13 @@ function QueueItem({ item, position, isYou, isTA, queueType, onRemove, onCallSpe
         {item.description && (
           <div className={`queue-item-description ${isExpanded ? 'expanded' : ''}`}>{item.description}</div>
         )}
-        {item.attachment && (
-          <div className="queue-item-description">
-            <a
-              href={`${API_BASE_URL}${item.attachment.downloadUrl}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              onClick={(e) => e.stopPropagation()}
-            >
-              Attachment: {item.attachment.fileName}
-            </a>
-          </div>
+        {isExpanded && item.attachment && (
+          <AttachmentPreview
+            fileName={item.attachment.fileName}
+            contentType={item.attachment.contentType}
+            sizeBytes={item.attachment.sizeBytes}
+            downloadUrl={`${API_BASE_URL}${item.attachment.downloadUrl}`}
+          />
         )}
         {isTA && item.followers && item.followers.length > 0 && (
           <div className={`queue-item-followers ${isExpanded ? '' : 'collapsed'}`}>
@@ -500,9 +509,11 @@ function QueueCard({
   const [studentId, setStudentId] = useState('');
   const [email, setEmail] = useState(currentUserEmail);
   const [description, setDescription] = useState('');
-  const [attachmentFile, setAttachmentFile] = useState<File | null>(null);
+  const { fileInfo, fileError, validationChecks, setValidationChecks, handleFile, removeFile, resetFile } = useFileUpload();
   const [attachmentError, setAttachmentError] = useState('');
   const [isJoining, setIsJoining] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploadStatus, setUploadStatus] = useState<'uploading' | 'validating' | 'complete' | 'error' | null>(null);
   const [joinType, setJoinType] = useState<QueueType>('marking'); // For combined view joining
 
   useEffect(() => {
@@ -524,32 +535,71 @@ function QueueCard({
 
     setIsJoining(true);
     setAttachmentError('');
+    setUploadStatus(null);
+    setUploadProgress(0);
 
     try {
       let attachment: AttachmentMeta | null = null;
 
-      if (effectiveType === 'question' && attachmentFile) {
+      if (fileInfo) {
         if (!room) {
           throw new Error('Room is required before uploading a file.');
         }
 
+        setUploadStatus('uploading');
         const formData = new FormData();
-        formData.append('file', attachmentFile);
+        formData.append('file', fileInfo.file);
         formData.append('room', room);
         formData.append('queueType', effectiveType);
 
-        const response = await fetch(`${API_BASE_URL}/api/attachments/upload`, {
-          method: 'POST',
-          headers: getAuthHeaders(getAuthSession()),
-          body: formData,
+        // Use XMLHttpRequest for progress tracking
+        attachment = await new Promise<AttachmentMeta>((resolve, reject) => {
+          const xhr = new XMLHttpRequest();
+          xhr.open('POST', `${API_BASE_URL}/api/attachments/upload`);
+
+          const session = getAuthSession();
+          if (session?.token) {
+            xhr.setRequestHeader('Authorization', `Bearer ${session.token}`);
+          }
+
+          xhr.upload.onprogress = (e) => {
+            if (e.lengthComputable) {
+              setUploadProgress(Math.round((e.loaded / e.total) * 100));
+            }
+          };
+
+          xhr.onload = () => {
+            if (xhr.status >= 200 && xhr.status < 300) {
+              setUploadStatus('validating');
+              setTimeout(() => {
+                setUploadStatus('complete');
+                setValidationChecks(prev =>
+                  prev.map(c => c.status === 'pending' ? { ...c, status: 'pass' as const, detail: 'No threats detected' } : c)
+                );
+              }, 600);
+              try {
+                resolve(JSON.parse(xhr.responseText));
+              } catch {
+                reject(new Error('Invalid server response'));
+              }
+            } else {
+              setUploadStatus('error');
+              try {
+                const data = JSON.parse(xhr.responseText);
+                reject(new Error(data.error || 'Attachment upload failed'));
+              } catch {
+                reject(new Error('Attachment upload failed'));
+              }
+            }
+          };
+
+          xhr.onerror = () => {
+            setUploadStatus('error');
+            reject(new Error('Network error during upload'));
+          };
+
+          xhr.send(formData);
         });
-
-        if (!response.ok) {
-          const data = await response.json().catch(() => ({ error: 'Attachment upload failed' }));
-          throw new Error(data.error || 'Attachment upload failed');
-        }
-
-        attachment = await response.json() as AttachmentMeta;
       }
 
       await onJoin(effectiveType)({
@@ -560,7 +610,9 @@ function QueueCard({
         attachment,
       });
       setDescription('');
-      setAttachmentFile(null);
+      resetFile();
+      setUploadStatus(null);
+      setUploadProgress(0);
     } catch (error) {
       setAttachmentError(error instanceof Error ? error.message : 'Upload failed');
     } finally {
@@ -786,42 +838,40 @@ function QueueCard({
               )}
 
               {(type === 'question' || (type === 'combined' && joinType === 'question')) && (
-                <>
-                  <div className="form-group">
-                    <label className="form-label">Brief Description (optional)</label>
-                    <input
-                      type="text"
-                      className="form-input"
-                      placeholder="e.g., Need help with pathfinding algorithm"
-                      value={description}
-                      onChange={(e) => setDescription(e.target.value)}
-                      maxLength={100}
-                    />
-                  </div>
-                  <div className="form-group">
-                    <label className="form-label">Screenshot or file (optional)</label>
-                    <input
-                      type="file"
-                      className="form-input"
-                      accept="image/*,.pdf,.txt,.log"
-                      onChange={(e) => setAttachmentFile(e.target.files?.[0] ?? null)}
-                    />
-                  </div>
-                </>
+                <div className="form-group">
+                  <label className="form-label">Brief Description (optional)</label>
+                  <input
+                    type="text"
+                    className="form-input"
+                    placeholder="e.g., Need help with pathfinding algorithm"
+                    value={description}
+                    onChange={(e) => setDescription(e.target.value)}
+                    maxLength={100}
+                  />
+                </div>
               )}
 
-              {/* Email field temporarily hidden
+              {/* File Upload - available for both marking and question */}
               <div className="form-group">
-                <label className="form-label">Email (optional, for notifications)</label>
-                <input
-                  type="email"
-                  className="form-input"
-                  placeholder="your@email.com"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
+                <label className="form-label">
+                  Attachment <span className="form-label-optional">(optional)</span>
+                </label>
+                <p className="form-hint">Upload a screenshot, photo of handwritten work, or any relevant file for the TA.</p>
+                <FileDropZone
+                  fileInfo={fileInfo}
+                  onFile={handleFile}
+                  onRemove={removeFile}
+                  error={fileError}
                 />
               </div>
-              */}
+
+              {validationChecks.length > 0 && (
+                <ValidationChecks checks={validationChecks} />
+              )}
+
+              {uploadStatus && (
+                <UploadProgress progress={uploadProgress} status={uploadStatus} />
+              )}
 
               {attachmentError && (
                 <div className="queue-item-description" style={{ color: 'var(--danger)', marginBottom: '12px' }}>

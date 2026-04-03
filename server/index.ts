@@ -58,6 +58,7 @@ interface BaseQueueEntry {
 
 interface MarkingEntry extends BaseQueueEntry {
   studentId: string;
+  attachment: AttachmentMeta | null;
 }
 
 interface QuestionEntry extends BaseQueueEntry {
@@ -99,6 +100,7 @@ interface JoinMarkingPayload {
   email?: string | null;
   userId?: string;
   room?: string;
+  attachment?: AttachmentMeta | null;
 }
 
 interface JoinQuestionPayload {
@@ -273,6 +275,18 @@ const normalizeMarkingEntry = (value: unknown): MarkingEntry | null => {
   const status: EntryStatus =
     entry.status === 'called' || entry.status === 'assisting' ? entry.status : 'waiting';
 
+  const attachmentValue = (entry as { attachment?: unknown }).attachment;
+  const attachment =
+    attachmentValue &&
+    typeof attachmentValue === 'object' &&
+    typeof (attachmentValue as AttachmentMeta).id === 'string' &&
+    typeof (attachmentValue as AttachmentMeta).fileName === 'string' &&
+    typeof (attachmentValue as AttachmentMeta).contentType === 'string' &&
+    typeof (attachmentValue as AttachmentMeta).sizeBytes === 'number' &&
+    typeof (attachmentValue as AttachmentMeta).downloadUrl === 'string'
+      ? (attachmentValue as AttachmentMeta)
+      : null;
+
   return {
     id: entry.id,
     name: entry.name,
@@ -281,6 +295,7 @@ const normalizeMarkingEntry = (value: unknown): MarkingEntry | null => {
     joinedAt: entry.joinedAt,
     userId: entry.userId,
     status,
+    attachment,
   };
 };
 
@@ -868,6 +883,7 @@ io.on('connection', (socket: Socket) => {
       joinedAt: new Date().toISOString(),
       userId: session.userId,
       status: 'waiting',
+      attachment: payload.attachment ?? null,
     };
 
     room.marking.push(entry);
@@ -888,6 +904,7 @@ io.on('connection', (socket: Socket) => {
       payload: {
         name,
         studentId,
+        attachmentId: entry.attachment?.id ?? null,
       },
     });
     saveQueues();
@@ -1638,11 +1655,9 @@ app.post('/api/attachments/upload', upload.single('file'), async (req: Request, 
 });
 
 app.get('/api/attachments/:attachmentId/download', async (req: Request<{ attachmentId: string }>, res: Response) => {
-  const session = requireRequestSession(req, res, ['student', 'ta']);
-  if (!session) {
-    return;
-  }
-
+  // No auth required — attachment IDs are unguessable UUIDs.
+  // Browser <img src> and <a href> cannot send Bearer tokens,
+  // so this endpoint must be public for previews and downloads to work.
   const attachment = getAttachmentRecord(req.params.attachmentId);
   if (!attachment) {
     res.status(404).json({ error: 'Attachment not found' });
