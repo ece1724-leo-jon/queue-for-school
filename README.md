@@ -4,6 +4,8 @@ A real-time queue management system for TA practical sessions. Built with React 
 
 **Live demo:** [queue.ictrl.ca](https://queue.ictrl.ca) (note: the live version may not include the latest features such as UofT OTP auth and file uploads)
 
+**Demo video:** [queue.ictrl.ca/video](https://queue.ictrl.ca/video)
+
 ![Homepage](images/homepage.png)
 
 ## Features
