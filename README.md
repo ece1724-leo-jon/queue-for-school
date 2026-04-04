@@ -2,6 +2,8 @@
 
 A real-time queue management system for TA practical sessions. Built with React + Socket.IO.
 
+**Live demo:** [queue.ictrl.ca](https://queue.ictrl.ca) (note: the live version may not include the latest features such as UofT OTP auth and file uploads)
+
 ![Homepage](images/homepage.png)
 
 ## Features
@@ -13,6 +15,8 @@ A real-time queue management system for TA practical sessions. Built with React 
 - 👨‍🏫 **TA & Student Views**: Toggle between perspectives
 - 📱 **Responsive Design**: Works on desktop and mobile
 - 🌙 **Dark Mode**: Switch between light and dark mode
+- 🔐 **UofT OTP Authentication**: Email-based OTP login for students and TAs
+- 📎 **File Uploads**: Attach screenshots, handwritten work, or documents when joining a queue
 
 
 ## Screenshots
@@ -54,12 +58,30 @@ npm install
 
 ### 2. Start the Server
 
+**Basic (no email, local file storage):**
+
 ```bash
 cd server
 npm run dev
 ```
 
-The server will start on `http://localhost:3001`
+**With email notifications enabled:**
+
+```bash
+cd server
+TA_EMAIL_ALLOWLIST="ta1@mail.utoronto.ca,ta2@mail.utoronto.ca" \
+APP_BASE_URL="http://localhost:5173" \
+SMTP_HOST="smtp.gmail.com" \
+SMTP_PORT="587" \
+SMTP_USER="your-email@gmail.com" \
+SMTP_PASS="your-app-password" \
+SMTP_FROM="ECE Queue <your-email@gmail.com>" \
+npm run dev
+```
+
+> **Gmail setup:** You need a Gmail [App Password](https://myaccount.google.com/apppasswords) (not your regular password). Enable 2-Step Verification on your Google account first, then generate an app password.
+
+The server will start on `http://localhost:3001`.
 
 ### 3. Start the Frontend
 
@@ -76,25 +98,32 @@ The app will open at `http://localhost:5173`
 ### For Students
 
 1. Open the app in your browser
-2. Enable notifications when prompted
-3. Fill in your name and last 4 digits of student ID (for marking queue)
-4. Click "Join Queue"
-5. Wait for your turn - you'll receive notifications as you move up
+2. Log in with your UofT email (an OTP code will be sent)
+3. Enable notifications when prompted
+4. Fill in your name and last 4 digits of student ID (for marking queue)
+5. Optionally attach a screenshot or file (drag & drop or click to browse)
+6. Click "Join Queue"
+7. Wait for your turn - you'll receive notifications as you move up
 
 ### For TAs
 
-1. Click "TA View" in the toggle
-2. See both queues with all students
-3. Click "Check In Next" to call the next student
-4. Use the ✕ button to remove specific students if needed
+1. Log in with a TA-allowlisted email
+2. See both queues with all students in a combined dashboard
+3. Click "Next Marking" or "Next Question" to call the next student
+4. Expand queue items to view attached files and image previews
+5. Use the controls to cancel calls, push back, or remove students
 
 ## Tech Stack
 
-- **Frontend**: React + Vite
-- **Backend**: Express + Socket.IO
-- **Styling**: Vanilla CSS with modern design
+- **Frontend**: React 19 + Vite + Tailwind CSS
+- **Backend**: Express + Socket.IO + better-sqlite3
+- **Auth**: Email-based OTP with session tokens
+- **Email**: Nodemailer (SMTP)
+- **File Storage**: Local filesystem (default) or S3-compatible cloud storage
 
 ## Environment Variables
+
+### Frontend
 
 Create a `.env` file in the root:
 
@@ -103,6 +132,41 @@ VITE_SOCKET_URL=http://localhost:3001
 ```
 
 For production, set this to your server URL.
+
+### Backend
+
+The following environment variables are set when running the server (see [Start the Server](#2-start-the-server)):
+
+| Variable | Required | Description |
+|---|---|---|
+| `TA_EMAIL_ALLOWLIST` | No | Comma-separated list of emails allowed to log in as TA |
+| `APP_BASE_URL` | No | Base URL of the frontend (used in email links). Defaults to `http://localhost:5173` |
+| `SMTP_HOST` | No | SMTP server hostname (e.g. `smtp.gmail.com`) |
+| `SMTP_PORT` | No | SMTP server port (e.g. `587`) |
+| `SMTP_USER` | No | SMTP username / email |
+| `SMTP_PASS` | No | SMTP password or app password |
+| `SMTP_FROM` | No | Sender address for emails (e.g. `ECE Queue <you@gmail.com>`) |
+| `S3_BUCKET` | No | S3 bucket name for file storage |
+| `S3_REGION` | No | S3 region (e.g. `us-east-1`, or `auto` for Cloudflare R2) |
+| `S3_ENDPOINT` | No | S3 endpoint URL |
+| `S3_ACCESS_KEY_ID` | No | S3 access key |
+| `S3_SECRET_ACCESS_KEY` | No | S3 secret key |
+
+> All variables are optional. Without SMTP configured, email features (OTP login, turn notifications) are disabled. Without S3 configured, file uploads are stored locally in `server/uploads/`.
+
+### File Storage
+
+File uploads support two storage backends:
+
+**Local storage (default)** — files are saved to `server/uploads/`. No configuration needed. This is suitable for development and single-server deployments.
+
+**S3-compatible cloud storage** — set all five `S3_*` environment variables to enable. Works with:
+
+- **AWS S3** — set `S3_ENDPOINT` to `https://s3.<region>.amazonaws.com`
+- **Cloudflare R2** (recommended, free 10GB) — set `S3_REGION=auto` and `S3_ENDPOINT=https://<account-id>.r2.cloudflarestorage.com`
+- **MinIO** or any other S3-compatible service
+
+Supported file types: PNG, JPEG, GIF, WebP, PDF. Max file size: 5 MB.
 
 ## Deployment
 
@@ -116,7 +180,7 @@ Upload the `dist` folder.
 
 ### Backend (Railway/Render/Fly.io)
 
-Deploy the `server` folder as a Node.js application.
+Deploy the `server` folder as a Node.js application. Set the environment variables listed above as needed.
 
 ## License
 
